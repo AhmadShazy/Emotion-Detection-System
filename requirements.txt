@@ -1,0 +1,22 @@
+# Core ML Frameworks (CPU-optimized where possible)
+torch
+torchaudio
+transformers
+speechbrain
+
+# Speech-to-Text
+openai-whisper
+
+# Audio Recording & Processing
+sounddevice
+numpy
+scipy
+soundfile
+
+# Data Processing (for OpenFace results)
+pandas
+
+# Utilities
+requests
+huggingface_hub
+tqdm

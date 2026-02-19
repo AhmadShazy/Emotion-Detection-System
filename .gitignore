@@ -1,0 +1,12 @@
+# Data
+data/
+# Environment
+.venv/
+.venv_broken/
+__pycache__/
+
+# External Models
+external/whisper/
+external/ser_project/
+external/openface/
+wav2vec2_checkpoints/
