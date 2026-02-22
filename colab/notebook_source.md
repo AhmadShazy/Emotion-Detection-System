@@ -73,66 +73,82 @@ class LiveAssistantOrchestrator:
 def start_live_system():
     orchestrator = LiveAssistantOrchestrator()
     
-    # JavaScript for Continuous Camera Capture
-    js = Javascript('''
-        async function runLive() {
-            const video = document.createElement('video');
-            video.style.display = 'block';
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            document.body.appendChild(video);
-            video.srcObject = stream;
-            await video.play();
-
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-
-            while (true) {
-                ctx.drawImage(video, 0, 0);
-                const imgData = canvas.toDataURL('image/jpeg', 0.8);
-                
-                // Send frame to Python for processing
-                const result = await google.colab.kernel.invokeFunction('notebook.process_all', [imgData], {});
-                
-                // Display results overlay
-                if (result) {
-                    const data = result.data['application/json'];
-                    // We can update a separate div here with the status
-                    document.getElementById('status-box').innerText = 
-                        `Face Emotion: ${data.face_emotion}\\nVoice Emotion: ${data.voice_emotion}\\nTranscript: ${data.transcript}`;
-                }
-                
-                await new Promise(r => setTimeout(r, 100)); // ~10 FPS
-            }
-        }
-    ''')
-    
-    # Create HTML layout for the dashboard
-    from IPython.display import HTML
     display(HTML('''
         <div style="padding: 20px; background: #1e1e1e; color: white; border-radius: 10px; font-family: sans-serif;">
             <h2>🤖 Humanoid Live Assistant - SOTA Dashboard</h2>
+            <p style="color: #aaa;">Please ensure you click <b>"Allow"</b> for Camera and Microphone permissions.</p>
             <div id="status-box" style="font-size: 1.2em; border-left: 5px solid #00ff00; padding-left: 15px; margin-bottom: 20px;">
-                Initializing...
+                Initializing models... (Wait for "All models loaded" message)
             </div>
-            <div id="video-container"></div>
+            <div id="video-container" style="display: flex; justify-content: center;"></div>
         </div>
     '''))
     
     def process_all_wrapper(frame_b64):
-        face_emo = orchestrator.process_frame(frame_b64)
-        # For demo purposes, we simulate the voice/transcript logic
-        return output.JSON({
-            "face_emotion": face_emo,
-            "voice_emotion": "Processing...",
-            "transcript": "Listening..."
-        })
+        try:
+            face_emo = orchestrator.process_frame(frame_b64)
+            return output.JSON({
+                "face_emotion": face_emo,
+                "voice_emotion": "Processing...",
+                "transcript": "Listening..."
+            })
+        except Exception as e:
+            return output.JSON({"error": str(e)})
 
+    # Robust JS with Error Handling
+    js = Javascript('''
+        async function runLive() {
+            const statusBox = document.getElementById('status-box');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                const video = document.createElement('video');
+                video.style.width = '100%';
+                video.style.maxWidth = '600px';
+                video.srcObject = stream;
+                document.getElementById('video-container').appendChild(video);
+                await video.play();
+
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext('2d');
+
+                statusBox.innerText = "System Live! Analysing...";
+
+                while (true) {
+                    ctx.drawImage(video, 0, 0);
+                    const imgData = canvas.toDataURL('image/jpeg', 0.5);
+                    
+                    try {
+                        const result = await google.colab.kernel.invokeFunction('notebook.process_all', [imgData], {});
+                        if (result && result.data) {
+                            const data = result.data['application/json'];
+                            if (data.error) {
+                                statusBox.innerText = `Error: ${data.error}`;
+                            } else {
+                                statusBox.innerHTML = `
+                                    <b>Face Emotion:</b> ${data.face_emotion}<br>
+                                    <b>Voice Emotion:</b> ${data.voice_emotion}<br>
+                                    <b>Transcript:</b> ${data.transcript}
+                                `;
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Inference Error:", e);
+                    }
+                    
+                    await new Promise(r => setTimeout(r, 200)); // 5 FPS for stability
+                }
+            } catch (err) {
+                statusBox.innerHTML = `<span style="color: #ff4444;">❌ Access Denied: ${err.message}. Ensure camera/mic permissions are granted.</span>`;
+            }
+        }
+        runLive();
+    ''')
+    
     output.register_callback('notebook.process_all', process_all_wrapper)
     display(js)
-    output.eval_js('runLive()')
 
 # EXECUTE THIS TO START
-# start_live_system()
+start_live_system()
 ```
