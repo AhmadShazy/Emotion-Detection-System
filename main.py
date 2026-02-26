@@ -59,7 +59,6 @@ def main():
         print("2. Voice Emotion Analysis (SER_SpeechBrain)")
         print("3. Speech-to-Text (STT_Whisper)")
         print("4. Full Analysis (Face + Voice + STT)")
-
         print("5. Exit")
         
         choice = input("\nEnter choice (1-6): ")
