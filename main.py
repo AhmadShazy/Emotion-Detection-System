@@ -39,6 +39,13 @@ except ImportError as e:
     def run_full_analysis():
         print("❌ Full Analysis module not available.")
 
+try:
+    from src.streaming.live_orchestrator import run_live_streaming_session
+except ImportError as e:
+    print(f"Warning: Could not import V2 Streaming module: {e}")
+    def run_live_streaming_session():
+        print("❌ V2 Streaming module not available.")
+
 
 
 def run_ser_pipeline_wrapper():
@@ -53,13 +60,14 @@ def run_ser_pipeline_wrapper():
 def main():
     while True:
         print("\n==========================================")
-        print("🤖 HUMANOID ASSISTANT - MAIN MENU")
+        print("HUMANOID ASSISTANT - MAIN MENU")
         print("==========================================")
         print("1. Face Expression Analysis (OpenFace)")
         print("2. Voice Emotion Analysis (SER_SpeechBrain)")
         print("3. Speech-to-Text (STT_Whisper)")
-        print("4. Full Analysis (Face + Voice + STT)")
-        print("5. Exit")
+        print("4. Full Analysis (Face + Voice + STT) [Batch]")
+        print("5. V2 Real-Time Streaming Architecture [Live]")
+        print("6. Exit")
         
         choice = input("\nEnter choice (1-6): ")
         
@@ -72,6 +80,8 @@ def main():
         elif choice == '4':
             run_full_analysis()
         elif choice == '5':
+            run_live_streaming_session()
+        elif choice == '6':
             print("Exiting...")
             break
         else:

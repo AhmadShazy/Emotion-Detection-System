@@ -39,6 +39,13 @@ This will present options to run:
 2.  **Voice Emotion Analysis** (Audio recording + SpeechBrain inference)
 3.  **Speech-to-Text** (Audio recording + Whisper transcription)
 4.  **Full Analysis** (Runs all pipelines sequentially/together)
+5.  **V2 Real-Time Streaming Architecture [Live]** (Runs continuous, concurrent evaluation of Face, Voice, and Text modalities, driven by an intelligent dynamic Voice Activity Detector).
+
+### V2 Streaming Architecture Features
+- **Queue Broadcasting:** Microphone audio is simultaneously broadcast to independent worker threads without starvation.
+- **Dynamic VAD:** Faster-Whisper dynamically groups speech into natural sentences by tracking 1.5-second trailing silences, allowing unconstrained turn phrasing.
+- **Anti-Hallucination & Anti-Speaking Fillers:** VAD actively discards non-speech mic bumps, and OpenFace utilizes an active penalty mask to ensure mouth articulation isn't falsely classified as smiling (`Happy`).
+- **Synchronous Fusion:** The Orchestrator aggregates the final Face, Voice, and Text emotions into a single Assistant response state in under ~0.5 seconds per turn.
 
 ### Individual Modules
 

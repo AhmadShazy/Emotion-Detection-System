@@ -42,20 +42,20 @@ if not df.empty:
 # ===============================
 def classify_emotion(row):
 
-    # Happy
-    if row["AU12_c"] == 1 and row["AU06_c"] == 1:
+    # Happy (Lip corner puller OR cheek raiser)
+    if row["AU12_c"] == 1 or row["AU06_c"] == 1:
         return "Happy"
 
-    # Angry
-    if row["AU04_c"] == 1 and row["AU07_c"] == 1 and row["AU23_c"] == 1:
+    # Angry (Brow lowerer OR Lid tightener OR Lip tightener)
+    if row["AU04_c"] == 1 or row["AU07_c"] == 1 or row["AU23_c"] == 1:
         return "Angry"
 
-    # Sad
-    if row["AU01_c"] == 1 and row["AU04_c"] == 1 and row["AU15_c"] == 1:
+    # Sad (Inner brow raiser OR lip corner depressor)
+    if row["AU01_c"] == 1 or row["AU15_c"] == 1:
         return "Sad"
 
-    # Surprised
-    if row["AU01_c"] == 1 and row["AU02_c"] == 1 and row["AU26_c"] == 1:
+    # Surprised (Inner brow raiser OR outer brow raiser OR jaw drop)
+    if row["AU01_c"] == 1 or row["AU02_c"] == 1 or row["AU26_c"] == 1:
         return "Surprised"
 
     return "Neutral"
