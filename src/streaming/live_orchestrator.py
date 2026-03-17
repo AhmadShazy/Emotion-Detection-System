@@ -16,6 +16,7 @@ from src.streaming.streaming_face import StreamingFace
 from src.streaming.emotion_state_manager import EmotionStateManager
 from src.streaming.assistant_response_engine import AssistantResponseEngine
 from src.text_emotion.analysis import analyze_text_emotion
+from src.streaming.llm_adapter import LLMAdapter
 
 def run_live_streaming_session():
     print("\n=======================================================")
@@ -41,7 +42,7 @@ def run_live_streaming_session():
     audio_streamer.add_queue(ser_audio_queue)
 
     # STT (Faster-Whisper CPU) waits for trailing silence to extract sentences naturally
-    stt_worker = StreamingSTT(audio_queue=stt_audio_queue, text_queue=text_stt_queue, status_queue=ui_status_queue, model_size="tiny", trailing_silence_seconds=0.8)
+    stt_worker = StreamingSTT(audio_queue=stt_audio_queue, text_queue=text_stt_queue, status_queue=ui_status_queue, model_size="tiny", trailing_silence_seconds=1.5)
     
     # SER (Wav2Vec2 Dynamic Build)
     ser_worker = StreamingSER(audio_queue=ser_audio_queue, emotion_queue=None) # queue no longer needed
@@ -55,6 +56,7 @@ def run_live_streaming_session():
     # Synchronous Fusion Brain & Assistant Engine
     state_manager = EmotionStateManager()
     response_engine = AssistantResponseEngine()
+    llm_adapter = LLMAdapter()
 
     try:
         # Start background sensor workers
@@ -124,56 +126,42 @@ def run_live_streaming_session():
                 unified_emotion_data = state_manager.fuse(text_state, voice_state, face_state)
                 dom_emotion = unified_emotion_data["dominant_emotion"]
                 
-                # 5. Build and print the v2 structured JSON payload
+                # 5. Format the unified data using the new LLM Adapter layer
                 now_str = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
                 
-                dom_tone = "neutral"
-                if dom_emotion in ["sad", "fear", "anxiety", "guilt", "shame"]: dom_tone = "distressed"
-                elif dom_emotion in ["angry", "frustration", "disgust"]: dom_tone = "angry"
-                elif dom_emotion in ["happy", "joy", "surprised"]: dom_tone = "upbeat"
-                elif dom_emotion in ["calm", "neutral", "empathetic"]: dom_tone = "calm"
+                raw_inputs = {
+                    "text": text,
+                    "timestamp": now_str,
+                    "voice_emotion": voice_state.get('emotion', 'neutral'),
+                    "face_emotion": face_state.get('emotion', 'neutral')
+                }
                 
+                context = {
+                    "session_id": session_id,
+                    "conversation_history": [
+                        {"role": t["speaker"], "content": t["text"]}
+                        for t in conversation_history
+                    ],
+                    "turns": conversation_history
+                }
+                
+                payload = llm_adapter.process(
+                    fusion_output=unified_emotion_data,
+                    raw_inputs=raw_inputs,
+                    context=context
+                )
+                
+                # Append to our local quick history for the next turn
                 turn_record = {
                     "speaker": "user",
                     "timestamp": now_str,
                     "text": text,
-                    "emotion": dom_emotion,
-                    "tone": dom_tone
+                    "emotion": payload["emotion_analysis"]["dominant_emotion"],
+                    "tone": payload["tone_analysis"]["tone"]
                 }
                 conversation_history.append(turn_record)
                 if len(conversation_history) > 6:
                     conversation_history.pop(0)
-
-                payload = {
-                    "session_id": session_id,
-                    "user_input": {
-                        "text": text,
-                        "timestamp": now_str
-                    },
-                    "emotion_analysis": {
-                        "dominant_emotion": dom_emotion,
-                        "confidence": unified_emotion_data["confidence"],
-                        "emotion_probabilities": unified_emotion_data["emotion_probabilities"]
-                    },
-                    "emotion_dynamics": unified_emotion_data["emotion_dynamics"],
-                    "conflict_analysis": unified_emotion_data["conflict_analysis"],
-                    "modality_contributions": unified_emotion_data["modality_contributions"],
-                    "reliability": unified_emotion_data["reliability"],
-                    "tone_analysis": {
-                        "tone": dom_tone,
-                        "confidence": 0.85
-                    },
-                    "context": {
-                        "conversation_history": [
-                            {"role": t["speaker"], "content": t["text"]}
-                            for t in conversation_history
-                        ]
-                    },
-                    "conversation_context": {
-                        "window_size": 6,
-                        "turns": conversation_history
-                    }
-                }
                 
                 print("\n" + "="*80)
                 print(">>> OUTBOUND V2 PAYLOAD")

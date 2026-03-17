@@ -191,23 +191,23 @@ class EmotionStateManager:
 
         result = {
             "dominant_emotion": self.current_stable_emotion,
-            "confidence": round(smoothed_confidence, 2),
-            "emotion_probabilities": {k: round(v, 2) for k, v in probs_output.items()},
+            "confidence": round(float(smoothed_confidence), 2),
+            "emotion_probabilities": {k: round(float(v), 2) for k, v in probs_output.items()},
             "emotion_dynamics": {
-                "trend": trend,
-                "stability": round(stability, 2),
-                "volatility": round(volatility, 2)
+                "trend": str(trend),
+                "stability": round(float(stability), 2),
+                "volatility": round(float(volatility), 2)
             },
             "conflict_analysis": {
-                "detected": conflict_detected,
-                "type": conflict_type,
-                "details": conflict_details
+                "detected": bool(conflict_detected),
+                "type": str(conflict_type),
+                "details": str(conflict_details)
             },
-            "modality_contributions": modality_contributions,
+            "modality_contributions": {k: float(v) for k, v in modality_contributions.items()},
             "reliability": {
-                "voice": round(v_rel, 2),
-                "face": round(f_rel, 2),
-                "text": round(t_rel, 2)
+                "voice": round(float(v_rel), 2),
+                "face": round(float(f_rel), 2),
+                "text": round(float(t_rel), 2)
             }
         }
 
