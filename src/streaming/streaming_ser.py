@@ -68,26 +68,40 @@ class StreamingSER(threading.Thread):
             }
             idx_to_label = {0: 'Angry', 1: 'Happy', 2: 'Neutral', 3: 'Sad'}
             
-            # Mini-chunk windowing (1 second chunks with 0.5s overlap)
+            # Mini-chunk windowing (1 second chunks with NO overlap to maximize CPU efficiency)
             chunk_size = self.sample_rate  # 1 second
-            step_size = self.sample_rate // 2 # 0.5 second overlap
+            step_size = self.sample_rate  # 1 second step
             
             all_probs = []
             
             if len(self.audio_buffer) >= chunk_size:
-                for start in range(0, len(self.audio_buffer) - chunk_size + 1, step_size):
+                # Limit to the last 5 seconds to prevent CPU hang on long unbroken sentences
+                process_buffer = self.audio_buffer[-5 * self.sample_rate:]
+                
+                chunks = []
+                for start in range(0, len(process_buffer) - chunk_size + 1, step_size):
                     end = start + chunk_size
-                    chunk = self.audio_buffer[start:end]
-                    tensor = torch.from_numpy(chunk).unsqueeze(0)
-                    out_prob, _, _, _ = self.ser_engine.classifier.classify_batch(tensor)
-                    probs = torch.softmax(out_prob[0], dim=0)
-                    all_probs.append(probs)
+                    chunks.append(process_buffer[start:end])
+                
+                # Stack all chunks into a single batch for parallel CPU execution
+                tensor = torch.from_numpy(np.array(chunks, dtype=np.float32))
+                out_prob, _, _, _ = self.ser_engine.classifier.classify_batch(tensor)
+                
+                # Flatten the time dimension if SpeechBrain returns (Batch, 1, Classes)
+                if out_prob.dim() == 3:
+                    out_prob = out_prob.squeeze(1)
+                    
+                probs = torch.softmax(out_prob, dim=1)
+                for i in range(len(chunks)):
+                    all_probs.append(probs[i])
             else:
                 # If too small for sliding window, just eval once
                 tensor = torch.from_numpy(self.audio_buffer).unsqueeze(0)
                 out_prob, _, _, _ = self.ser_engine.classifier.classify_batch(tensor)
-                probs = torch.softmax(out_prob[0], dim=0)
-                all_probs.append(probs)
+                if out_prob.dim() == 3:
+                    out_prob = out_prob.squeeze(1)
+                probs = torch.softmax(out_prob, dim=1)
+                all_probs.append(probs[0])
 
             # Stack into a 2D tensor: Shape (num_chunks, 4)
             stacked_probs = torch.stack(all_probs)
