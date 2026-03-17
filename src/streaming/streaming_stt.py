@@ -92,7 +92,7 @@ class StreamingSTT(threading.Thread):
         self.audio_buffer = np.array([], dtype=np.float32) # Clear buffer
 
         try:
-            segments, info = self.model.transcribe(audio_data, beam_size=5)
+            segments, info = self.model.transcribe(audio_data, beam_size=1)
             
             # Filter hallucinations: only keep segments where the model is confident someone is actually speaking
             valid_texts = []

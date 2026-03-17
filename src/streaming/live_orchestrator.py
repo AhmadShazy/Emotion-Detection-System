@@ -2,6 +2,9 @@ import queue
 import time
 import os
 import sys
+import json
+import uuid
+import datetime
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
@@ -38,7 +41,7 @@ def run_live_streaming_session():
     audio_streamer.add_queue(ser_audio_queue)
 
     # STT (Faster-Whisper CPU) waits for trailing silence to extract sentences naturally
-    stt_worker = StreamingSTT(audio_queue=stt_audio_queue, text_queue=text_stt_queue, status_queue=ui_status_queue, model_size="tiny", trailing_silence_seconds=1.5)
+    stt_worker = StreamingSTT(audio_queue=stt_audio_queue, text_queue=text_stt_queue, status_queue=ui_status_queue, model_size="tiny", trailing_silence_seconds=0.8)
     
     # SER (Wav2Vec2 Dynamic Build)
     ser_worker = StreamingSER(audio_queue=ser_audio_queue, emotion_queue=None) # queue no longer needed
@@ -69,6 +72,9 @@ def run_live_streaming_session():
         sys.stdout.write("\r[ 💤 Waiting for speech...  ]")
         sys.stdout.flush()
         
+        session_id = f"sess-{uuid.uuid4().hex[:8]}"
+        conversation_history = []
+        
         # Main Thread Loop acts as the Turn-Based Orchestrator
         while True:
             try:
@@ -89,13 +95,23 @@ def run_live_streaming_session():
                 # 2. Run mock Text Emotion Analysis
                 text_emotions = analyze_text_emotion(text, threshold=0.1)
                 text_emo_str = "Neutral (0.00)"
-                text_state = {"emotion": "Neutral", "confidence": 0.0}
+                text_state = {"emotion": "Neutral", "confidence": 0.0, "reliability": 1.0}
                 
                 if text_emotions and len(text_emotions) > 0:
                     top_emotion = text_emotions[0]['label']
                     top_score = text_emotions[0]['score']
                     text_emo_str = f"{top_emotion} ({top_score:.2f})"
-                    text_state = {"emotion": top_emotion, "confidence": top_score}
+                    
+                    # Compute Text Reliability
+                    text_reliability = 1.0
+                    words = len(text.split())
+                    if words < 3:
+                        text_reliability -= 0.3 # Short text is less reliable
+                    if "!" in text or "?" in text:
+                        text_reliability += 0.2
+                    text_reliability = min(1.0, max(0.0, text_reliability))
+                    
+                    text_state = {"emotion": top_emotion, "confidence": top_score, "reliability": text_reliability}
                     
                 # 3. Snapshot the latest SER and Face states
                 voice_state = ser_worker.get_current_emotion()
@@ -105,18 +121,68 @@ def run_live_streaming_session():
                 f_emo = f"{face_state['emotion']} ({face_state['confidence']:.2f})" if face_state['emotion'] else "N/A"
                 
                 # 4. Fuse the three snapshot modalities synchronously
-                unified_emotion = state_manager.fuse(text_state, voice_state, face_state)
+                unified_emotion_data = state_manager.fuse(text_state, voice_state, face_state)
+                dom_emotion = unified_emotion_data["dominant_emotion"]
                 
-                # 5. Output cleanly to console
-                print("\n" + "-"*60)
-                print(f"[💬 STT] \"{text}\"")
-                print(f"         ↳ [Text Analysis] Emotion: {text_emo_str}")
-                print(f"         ↳ [Voice (SER)  ] Emotion: {v_emo}")
-                print(f"         ↳ [Face (Vis)   ] Emotion: {f_emo}")
-                print("-" * 60)
+                # 5. Build and print the v2 structured JSON payload
+                now_str = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                
+                dom_tone = "neutral"
+                if dom_emotion in ["sad", "fear", "anxiety", "guilt", "shame"]: dom_tone = "distressed"
+                elif dom_emotion in ["angry", "frustration", "disgust"]: dom_tone = "angry"
+                elif dom_emotion in ["happy", "joy", "surprised"]: dom_tone = "upbeat"
+                elif dom_emotion in ["calm", "neutral", "empathetic"]: dom_tone = "calm"
+                
+                turn_record = {
+                    "speaker": "user",
+                    "timestamp": now_str,
+                    "text": text,
+                    "emotion": dom_emotion,
+                    "tone": dom_tone
+                }
+                conversation_history.append(turn_record)
+                if len(conversation_history) > 6:
+                    conversation_history.pop(0)
+
+                payload = {
+                    "session_id": session_id,
+                    "user_input": {
+                        "text": text,
+                        "timestamp": now_str
+                    },
+                    "emotion_analysis": {
+                        "dominant_emotion": dom_emotion,
+                        "confidence": unified_emotion_data["confidence"],
+                        "emotion_probabilities": unified_emotion_data["emotion_probabilities"]
+                    },
+                    "emotion_dynamics": unified_emotion_data["emotion_dynamics"],
+                    "conflict_analysis": unified_emotion_data["conflict_analysis"],
+                    "modality_contributions": unified_emotion_data["modality_contributions"],
+                    "reliability": unified_emotion_data["reliability"],
+                    "tone_analysis": {
+                        "tone": dom_tone,
+                        "confidence": 0.85
+                    },
+                    "context": {
+                        "conversation_history": [
+                            {"role": t["speaker"], "content": t["text"]}
+                            for t in conversation_history
+                        ]
+                    },
+                    "conversation_context": {
+                        "window_size": 6,
+                        "turns": conversation_history
+                    }
+                }
+                
+                print("\n" + "="*80)
+                print(">>> OUTBOUND V2 PAYLOAD")
+                print("="*80)
+                print(json.dumps(payload, indent=2))
+                print("="*80)
                 
                 # Let the assistant react synchronously right after the sentence block
-                response_engine.react(unified_emotion)
+                # response_engine.react(unified_emotion)  # Removed for json payload only
                 
                 # 6. Flush the audio/face buffers so the next sentence isn't polluted with old history
                 ser_worker.clear_buffer()

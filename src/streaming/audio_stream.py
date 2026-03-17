@@ -4,11 +4,11 @@ import numpy as np
 import sounddevice as sd
 
 class AudioStreamer:
-    def __init__(self, sample_rate=16000, chunk_duration=1.0):
+    def __init__(self, sample_rate=16000, chunk_duration=0.25):
         """
         Initializes the non-blocking audio stream using sounddevice.
         - sample_rate: 16000 Hz (standard for whisper/wav2vec)
-        - chunk_duration: Time in seconds per chunk (1.0 = 1 sec buffer)
+        - chunk_duration: Time in seconds per chunk (0.25 = 250ms buffer)
         """
         self.sample_rate = sample_rate
         self.chunk_duration = chunk_duration

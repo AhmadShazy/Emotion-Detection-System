@@ -45,7 +45,9 @@ This will present options to run:
 - **Queue Broadcasting:** Microphone audio is simultaneously broadcast to independent worker threads without starvation.
 - **Dynamic VAD:** Faster-Whisper dynamically groups speech into natural sentences by tracking 1.5-second trailing silences, allowing unconstrained turn phrasing.
 - **Anti-Hallucination & Anti-Speaking Fillers:** VAD actively discards non-speech mic bumps, and OpenFace utilizes an active penalty mask to ensure mouth articulation isn't falsely classified as smiling (`Happy`).
-- **Synchronous Fusion:** The Orchestrator aggregates the final Face, Voice, and Text emotions into a single Assistant response state in under ~0.5 seconds per turn.
+- **Adaptive Emotion Fusion:** The Orchestrator resolves conflicts between Face, Voice, and Text by calculating dynamic reliability scores (based on volume, frame stability, and semantics) instead of static averages. It actively detects hidden tone shifts (e.g., Masked Anger).
+- **Temporal Memory:** The system tracks the last $N$ speaker turns to evaluate emotional stability, recognizing gradual mood trends and overall volatility rather than treating each sentence in isolation.
+- **Rich Synchronous Output:** Emits a heavily structured JSON payload representing a complete "Turn Record" combining Face, Voice, Text, conflict resolution, and conversation history context in under ~0.5 seconds per turn.
 
 ### Individual Modules
 

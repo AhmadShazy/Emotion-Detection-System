@@ -35,6 +35,8 @@ class StreamingFace(threading.Thread):
         
         # We accumulate all emotions detected during the active Turn-Based speech
         self.recent_emotions = []
+        self.total_frames_polled = 0
+        self.valid_frames_polled = 0
         
         # State to hold the final evaluated emotion for this turn
         self.current_emotion = {"emotion": None, "confidence": 0.0}
@@ -106,11 +108,13 @@ class StreamingFace(threading.Thread):
             # Clean columns as OpenFace has spaces
             df.columns = df.columns.str.strip()
             
-            # Update index
+            # Update indices and metrics
             self.last_row_read += len(df)
+            self.total_frames_polled += len(df)
             
             # Filter valid frames
             valid_df = df[(df["success"] == 1) & (df["confidence"] > 0.8)].copy()
+            self.valid_frames_polled += len(valid_df)
             
             if valid_df.empty:
                 return
@@ -126,6 +130,16 @@ class StreamingFace(threading.Thread):
                 # Count frequencies across the entire turn
                 counts = Counter(self.recent_emotions)
                 
+                # Instability tracking (emotion transitions / total)
+                transitions = 0
+                for i in range(1, len(self.recent_emotions)):
+                    if self.recent_emotions[i] != self.recent_emotions[i-1]:
+                        transitions += 1
+                instability = transitions / len(self.recent_emotions) if len(self.recent_emotions) > 1 else 0.0
+                
+                # Reliability metric
+                reliability = self.valid_frames_polled / self.total_frames_polled if self.total_frames_polled > 0 else 0.0
+                
                 # Default to the most common emotion
                 dominant_emotion = counts.most_common(1)[0][0]
                 confidence = counts[dominant_emotion] / len(self.recent_emotions)
@@ -139,14 +153,16 @@ class StreamingFace(threading.Thread):
                     for emo, count in counts.items():
                         if emo not in ["Neutral", "Happy"] and count >= 1:
                             dominant_emotion = emo
-                            # Artificial confidence boost to prioritize the underlying expression
-                            confidence = 0.60 + (count * 0.1) 
+                            # Artificial confidence boost, clamped to 0.95 to prevent numeric overflow in fusion
+                            confidence = min(0.95, 0.60 + (count * 0.02)) 
                             break
                             
                 self.current_emotion = {
                     "source": "face",
                     "emotion": dominant_emotion,
-                    "confidence": confidence
+                    "confidence": confidence,
+                    "reliability": reliability,
+                    "instability": instability
                 }
                 
         except pd.errors.EmptyDataError:
@@ -164,9 +180,11 @@ class StreamingFace(threading.Thread):
         print("Stopped Streaming Face worker.")
 
     def get_current_emotion(self):
-        return getattr(self, "current_emotion", {"emotion": None, "confidence": 0.0})
+        return getattr(self, "current_emotion", {"emotion": None, "confidence": 0.0, "reliability": 0.0, "instability": 0.0})
 
     def clear_buffer(self):
         """Flushes the accumulated face history so the next turn starts fresh."""
         self.recent_emotions = []
-        self.current_emotion = {"emotion": None, "confidence": 0.0}
+        self.total_frames_polled = 0
+        self.valid_frames_polled = 0
+        self.current_emotion = {"emotion": None, "confidence": 0.0, "reliability": 0.0, "instability": 0.0}

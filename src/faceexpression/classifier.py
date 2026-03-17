@@ -46,8 +46,8 @@ def classify_emotion(row):
     if row["AU12_c"] == 1 or row["AU06_c"] == 1:
         return "Happy"
 
-    # Angry (Brow lowerer OR Lid tightener OR Lip tightener)
-    if row["AU04_c"] == 1 or row["AU07_c"] == 1 or row["AU23_c"] == 1:
+    # Angry (Brow lowerer AND Lid tightener) - Avoids false positives during speech
+    if row["AU04_c"] == 1 and row["AU07_c"] == 1:
         return "Angry"
 
     # Sad (Inner brow raiser OR lip corner depressor)
