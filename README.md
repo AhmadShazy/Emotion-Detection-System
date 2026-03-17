@@ -48,6 +48,7 @@ This will present options to run:
 - **Adaptive Emotion Fusion:** The Orchestrator resolves conflicts between Face, Voice, and Text by calculating dynamic reliability scores (based on volume, frame stability, and semantics) instead of static averages. It actively detects hidden tone shifts (e.g., Masked Anger).
 - **Temporal Memory:** The system tracks the last $N$ speaker turns to evaluate emotional stability, recognizing gradual mood trends and overall volatility rather than treating each sentence in isolation.
 - **Rich Synchronous Output:** Emits a heavily structured JSON payload representing a complete "Turn Record" combining Face, Voice, Text, conflict resolution, and conversation history context in under ~0.5 seconds per turn.
+- **LLM Adapter Export Layer:** Outputs an exact mapped response for Generative AI pipelines seamlessly expanding 6 hardware emotions into a 15-class psychological model alongside discrete tone decoupling.
 
 ### Individual Modules
 
