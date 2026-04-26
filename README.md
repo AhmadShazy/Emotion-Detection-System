@@ -1,59 +1,138 @@
 # Humanoid Assistant Demo
 
-This project demonstrates a modular Humanoid Assistant capable of Speech-to-Text (STT), Speech Emotion Recognition (SER), and Facial Expression Analysis.
+A modular, multimodal emotion-analysis system capable of analyzing emotion from **text**, **voice**, **facial expressions**, and all three simultaneously in real-time.
+
+---
 
 ## Project Structure
 
-- **main.py**: The central entry point for the application. Run this to access the main menu.
-- **src/**: Source code for the project modules.
-  - **stt/**: Speech-to-Text module using OpenAI's **Whisper**.
-  - **ser/**: Speech Emotion Recognition module using **SpeechBrain** (Wav2Vec2-IEMOCAP).
-  - **faceexpression/**: Face Expression Analysis utilizing external **OpenFace** binaries.
-  - **full_analysis/**: Orchestrates all three modules for a complete interaction analysis.
-  - **text_emotion/**: Helper module for analyzing emotion from transcribed text.
-- **external/**:
-  - **openface/**: Directory for the OpenFace executable (required for face analysis).
-  - **ser_project/**: Contains requirements for the SER module.
-- **data/**:
-  - **recordings/**: Stores audio recordings from the microphone.
-  - **processed/**: Stores intermediate processing results (e.g., OpenFace CSVs).
+```
+humanoid-assistant-demo/
+├── main.py                         # Entry point — main menu
+├── requirements.txt
+├── external/
+│   ├── openface/
+│   │   └── OpenFace_2.2.0_win_x64/
+│   │       └── FeatureExtraction.exe   # Required external binary
+│   └── whisper/                    # Whisper model cache (auto-downloaded)
+├── data/
+│   ├── recordings/                 # Saved .wav files
+│   ├── processed/                  # OpenFace CSV outputs
+│   └── analysis/                   # frame_level_emotions.csv, final_emotions.txt
+└── src/
+    ├── faceexpression/             # OpenFace pipeline + AU-based classifier
+    ├── ser/                        # SpeechBrain Wav2Vec2 SER engine
+    ├── stt/                        # Whisper speech-to-text
+    ├── text_emotion/               # RoBERTa text emotion (go_emotions)
+    ├── full_analysis/              # Legacy batch mode (all 3 pipelines)
+    └── streaming/                  # V2 real-time streaming architecture
+```
+
+---
 
 ## Setup & Requirements
 
-1.  **Python Environment**: Ensure you are running in the project's virtual environment.
-2.  **Dependencies**: Install python dependencies (see `requirements.txt` in root or `external/ser_project/`).
-    *   Key libraries: `speechbrain`, `transformers`, `torch`, `whisper`, `sounddevice`, `numpy`.
-3.  **OpenFace**: Ensure the OpenFace executable is correctly placed in `external/openface/OpenFace_2.2.0_win_x64/FeatureExtraction.exe`.
+1. **Python Environment** — Activate the project virtual environment (`.venv`).
+2. **Install Dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+   Key libraries: `speechbrain`, `transformers`, `torch`, `openai-whisper`, `faster-whisper`, `sounddevice`, `numpy`, `pandas`, `soundfile`
+
+3. **OpenFace Binary** — Place the executable at:
+   ```
+   external/openface/OpenFace_2.2.0_win_x64/FeatureExtraction.exe
+   ```
+
+4. **Model Downloads** — Whisper, SpeechBrain Wav2Vec2-IEMOCAP, and RoBERTa go_emotions are downloaded automatically on first use.
+
+---
 
 ## Usage
 
-### Main Menu
-The easiest way to use the tools is via the main menu:
+Run the main menu:
 
 ```bash
 python main.py
 ```
 
-This will present options to run:
-1.  **Face Expression Analysis** (Live webcam recording via OpenFace)
-2.  **Voice Emotion Analysis** (Audio recording + SpeechBrain inference)
-3.  **Speech-to-Text** (Audio recording + Whisper transcription)
-4.  **Full Analysis** (Runs all pipelines sequentially/together)
-5.  **V2 Real-Time Streaming Architecture [Live]** (Runs continuous, concurrent evaluation of Face, Voice, and Text modalities, driven by an intelligent dynamic Voice Activity Detector).
+---
 
-### V2 Streaming Architecture Features
-- **Queue Broadcasting:** Microphone audio is simultaneously broadcast to independent worker threads without starvation.
-- **Dynamic VAD:** Faster-Whisper dynamically groups speech into natural sentences by tracking 1.5-second trailing silences, allowing unconstrained turn phrasing.
-- **Anti-Hallucination & Anti-Speaking Fillers:** VAD actively discards non-speech mic bumps, and OpenFace utilizes an active penalty mask to ensure mouth articulation isn't falsely classified as smiling (`Happy`).
-- **Adaptive Emotion Fusion:** The Orchestrator resolves conflicts between Face, Voice, and Text by calculating dynamic reliability scores (based on volume, frame stability, and semantics) instead of static averages. It actively detects hidden tone shifts (e.g., Masked Anger).
-- **Temporal Memory:** The system tracks the last $N$ speaker turns to evaluate emotional stability, recognizing gradual mood trends and overall volatility rather than treating each sentence in isolation.
-- **Rich Synchronous Output:** Emits a heavily structured JSON payload representing a complete "Turn Record" combining Face, Voice, Text, conflict resolution, and conversation history context in under ~0.5 seconds per turn.
-- **LLM Adapter Export Layer:** Outputs an exact mapped response for Generative AI pipelines seamlessly expanding 6 hardware emotions into a 15-class psychological model alongside discrete tone decoupling.
+## Menu Options
 
-### Individual Modules
+```
+==========================================
+   HUMANOID ASSISTANT - MAIN MENU
+==========================================
+  1. 💬 Text Emotion Analysis  (Keyboard Input)
+  2. 🎤 Voice Analysis          (Speech + Emotion)
+  3. 🎬 Multimodal Recording    (Video + Voice Analysis)
+  4. 🌐 Live Multimodal Chat    (Real-Time Streaming)
+  5. 🚪 Exit
+==========================================
+```
 
-You can also run modules individually if their scripts allow (e.g., for testing):
+### Option 1 — Text Emotion Analysis
+- Type any text directly at the keyboard
+- Analyzes emotion using **RoBERTa** (`SamLowe/roberta-base-go_emotions`)
+- Displays top emotion labels with confidence scores and a visual bar chart
+- Loops so you can analyze multiple texts without returning to the menu
 
-- **STT**: `python src/stt/record_transcribe.py`
-- **SER**: `python src/ser/record_analyze.py`
-- **Face**: `python src/faceexpression/record_express.py`
+### Option 2 — Voice Analysis
+Records your voice **once** and runs three analyses on the same audio file:
+
+| Step | Model | Output |
+|---|---|---|
+| 1 | **SpeechBrain Wav2Vec2** | Voice emotion (Happy / Angry / Neutral / Sad) |
+| 2 | **OpenAI Whisper** (`base`) | Text transcription |
+| 3 | **RoBERTa** (go_emotions) | Text-level emotion from transcription |
+
+**Output example:**
+```
+🗣  Speech Emotion:  → Angry
+📝 Transcription:   → "I am really tired of this situation"
+💬 Text Emotion:    → Frustration (0.76), Sadness (0.42)
+```
+
+### Option 3 — Multimodal Recording
+Records **face and voice simultaneously**, then analyzes all modalities:
+
+- 🎥 **OpenFace** runs as a background process (webcam, non-blocking)
+- 🎤 **Microphone** records continuously via non-blocking `sounddevice` stream
+- Press **Enter** in the terminal to stop both recordings at any time
+- Reuses the Voice Analysis pipeline (Option 2 logic) — no duplicate recordings
+
+**Output example:**
+```
+📊 MULTIMODAL ANALYSIS REPORT
+📝 Transcription:       → "..."
+💬 Text Emotion:        → ...
+🗣  Voice Emotion (SER): → ...
+🙂 Face Emotion Timeline:
+   0.00s – 3.20s : Neutral
+   3.20s – 7.80s : Angry
+```
+
+### Option 4 — Live Multimodal Chat (V2 Streaming)
+Runs the full **V2 Real-Time Streaming Architecture** with all three modalities active concurrently:
+
+- **Dynamic VAD** via `faster-whisper` — detects natural sentence boundaries using trailing silence
+- **Queue Broadcasting** — microphone audio simultaneously fed to STT and SER workers
+- **Adaptive Emotion Fusion** — combines Face + Voice + Text with dynamic reliability weighting
+- **Conflict Detection** — identifies masked emotions (e.g., `masked_anger`, `suppressed_frustration`)
+- **Temporal Memory** — tracks emotional trends across the last N speaker turns
+- **LLM Adapter Output** — emits structured JSON per turn, expanding 6 core emotions into a 15-class psychological model ready for generative AI pipelines
+
+Press **Ctrl+C** to end the session.
+
+---
+
+## Running Individual Modules
+
+```bash
+python src/stt/record_transcribe.py          # STT only
+python src/ser/record_analyze.py             # SER only
+python src/faceexpression/record_express.py  # Face only
+python src/streaming/live_orchestrator.py    # V2 Streaming only
+python src/text_emotion/analysis.py          # Text emotion test
+```
