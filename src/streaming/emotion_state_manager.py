@@ -42,8 +42,8 @@ class EmotionStateManager:
         conflict_type = "none"
         conflict_details = ""
         
-        v_emo = self._align_emotion(voice_state.get("emotion")) if voice_state else None
-        f_emo = self._align_emotion(face_state.get("emotion")) if face_state else None
+        v_emo = self._align_emotion(voice_state["emotion"]) if voice_state else None
+        f_emo = self._align_emotion(face_state["emotion"]) if face_state else None
         
         # Example Conflict Rules
         if f_emo == "happy" and v_emo == "angry":
@@ -94,15 +94,14 @@ class EmotionStateManager:
         scores = {}
         total_active_weight = 0.0
         
-        # Extract default reliabilities if absent
-        t_rel = text_state.get("reliability", 1.0) if text_state else 0.0
-        v_rel = voice_state.get("reliability", 1.0) if voice_state else 0.0
-        f_rel = face_state.get("reliability", 1.0) if face_state else 0.0
+        # 1. Extract values directly assuming standardized input
+        t_rel = text_state["reliability"] if text_state else 0.0
+        v_rel = voice_state["reliability"] if voice_state else 0.0
+        f_rel = face_state["reliability"] if face_state else 0.0
         
-        # 1. Calibrate Confidences
-        t_conf = text_state.get("confidence", 0.0) * self.calibration["text"] if text_state else 0.0
-        v_conf = voice_state.get("confidence", 0.0) * self.calibration["voice"] if voice_state else 0.0
-        f_conf = face_state.get("confidence", 0.0) * self.calibration["face"] if face_state else 0.0
+        t_conf = text_state["confidence"] * self.calibration["text"] if text_state else 0.0
+        v_conf = voice_state["confidence"] * self.calibration["voice"] if voice_state else 0.0
+        f_conf = face_state["confidence"] * self.calibration["face"] if face_state else 0.0
 
         # 2. Conflict Resolver
         conflict_detected, conflict_type, conflict_details = self.detect_conflict(text_state, voice_state, face_state)
@@ -121,7 +120,7 @@ class EmotionStateManager:
         modality_contributions = {"voice": 0.0, "face": 0.0, "text": 0.0}
              
         # 3. Compute Adaptive Scores
-        if text_state and text_state.get("emotion"):
+        if text_state and text_state["emotion"]:
             emo = self._align_emotion(text_state["emotion"])
             weight = self.base_weights["text"] * t_rel
             contrib = weight * t_conf
@@ -129,7 +128,7 @@ class EmotionStateManager:
             total_active_weight += weight
             modality_contributions["text"] = contrib
             
-        if voice_state and voice_state.get("emotion"):
+        if voice_state and voice_state["emotion"]:
             emo = self._align_emotion(voice_state["emotion"])
             weight = self.base_weights["voice"] * v_rel * v_weight_mod
             contrib = weight * v_conf
@@ -137,7 +136,7 @@ class EmotionStateManager:
             total_active_weight += weight
             modality_contributions["voice"] = contrib
             
-        if face_state and face_state.get("emotion"):
+        if face_state and face_state["emotion"]:
             emo = self._align_emotion(face_state["emotion"])
             weight = self.base_weights["face"] * f_rel * f_weight_mod
             contrib = weight * f_conf

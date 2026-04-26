@@ -85,7 +85,7 @@ def analyze_openface_csv(csv_path):
         df = pd.read_csv(csv_path)
     except FileNotFoundError:
         print(f"❌ Error: File not found at {csv_path}")
-        return
+        return "File not found.", None
 
     df.columns = df.columns.str.strip()  # 🔥 FIX OPENFACE COLUMN SPACES
 
@@ -97,7 +97,7 @@ def analyze_openface_csv(csv_path):
 
     if df.empty:
         print("⚠️ No valid frames found after filtering! (Confidence < 0.8)")
-        return
+        return "No valid face frames detected.", None
 
     df["emotion"] = df.apply(classify_emotion, axis=1)
     df["smooth_emotion"] = smooth_emotions(df["emotion"], window=10)
@@ -149,7 +149,31 @@ def analyze_openface_csv(csv_path):
 
     print(f"✅ Emotion extraction completed. Saved to {final_output_path}")
     
-    return timeline_str
+    # Calculate dominant emotion and confidence for the unified pipeline
+    face_state = None
+    if not df.empty:
+        overall_counts = df["smooth_emotion"].value_counts(normalize=True)
+        if not overall_counts.empty:
+            dominant_emotion = overall_counts.index[0]
+            confidence = float(overall_counts.iloc[0])
+            
+            # Count frequencies to calculate instability (matching Option 4)
+            transitions = 0
+            emotions_list = df["emotion"].tolist()
+            for i in range(1, len(emotions_list)):
+                if emotions_list[i] != emotions_list[i-1]:
+                    transitions += 1
+            instability = transitions / len(emotions_list) if len(emotions_list) > 1 else 0.0
+            
+            face_state = {
+                "source": "face",
+                "emotion": dominant_emotion,
+                "confidence": confidence,
+                "reliability": 1.0,
+                "instability": instability
+            }
+
+    return timeline_str, face_state
 
 
 if __name__ == "__main__":

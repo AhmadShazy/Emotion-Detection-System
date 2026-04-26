@@ -17,6 +17,7 @@ from src.streaming.emotion_state_manager import EmotionStateManager
 from src.streaming.assistant_response_engine import AssistantResponseEngine
 from src.text_emotion.analysis import analyze_text_emotion
 from src.streaming.llm_adapter import LLMAdapter
+from src.streaming.unified_pipeline import build_text_state, process_and_print_unified_json
 
 def run_live_streaming_session():
     print("\n=======================================================")
@@ -54,9 +55,8 @@ def run_live_streaming_session():
     face_worker = StreamingFace(face_queue=None, csv_path=csv_path, openface_exe=openface_exe)
 
     # Synchronous Fusion Brain & Assistant Engine
-    state_manager = EmotionStateManager()
+    # (State manager and LLM adapter are now handled by unified_pipeline)
     response_engine = AssistantResponseEngine()
-    llm_adapter = LLMAdapter()
 
     try:
         # Start background sensor workers
@@ -74,8 +74,9 @@ def run_live_streaming_session():
         sys.stdout.write("\r[ 💤 Waiting for speech...  ]")
         sys.stdout.flush()
         
-        session_id = f"sess-{uuid.uuid4().hex[:8]}"
-        conversation_history = []
+        # Initial UI State
+        sys.stdout.write("\r[ 💤 Waiting for speech...  ]")
+        sys.stdout.flush()
         
         # Main Thread Loop acts as the Turn-Based Orchestrator
         while True:
@@ -96,78 +97,21 @@ def run_live_streaming_session():
                 
                 # 2. Run mock Text Emotion Analysis
                 text_emotions = analyze_text_emotion(text, threshold=0.1)
-                text_emo_str = "Neutral (0.00)"
-                text_state = {"emotion": "Neutral", "confidence": 0.0, "reliability": 1.0}
+                text_state = build_text_state(text, text_emotions)
                 
-                if text_emotions and len(text_emotions) > 0:
-                    top_emotion = text_emotions[0]['label']
-                    top_score = text_emotions[0]['score']
-                    text_emo_str = f"{top_emotion} ({top_score:.2f})"
-                    
-                    # Compute Text Reliability
-                    text_reliability = 1.0
-                    words = len(text.split())
-                    if words < 3:
-                        text_reliability -= 0.3 # Short text is less reliable
-                    if "!" in text or "?" in text:
-                        text_reliability += 0.2
-                    text_reliability = min(1.0, max(0.0, text_reliability))
-                    
-                    text_state = {"emotion": top_emotion, "confidence": top_score, "reliability": text_reliability}
-                    
                 # 3. Snapshot the latest SER and Face states
                 voice_state = ser_worker.get_current_emotion()
                 face_state = face_worker.get_current_emotion()
                 
-                v_emo = f"{voice_state['emotion']} ({voice_state['confidence']:.2f})" if voice_state['emotion'] else "N/A"
-                f_emo = f"{face_state['emotion']} ({face_state['confidence']:.2f})" if face_state['emotion'] else "N/A"
-                
-                # 4. Fuse the three snapshot modalities synchronously
-                unified_emotion_data = state_manager.fuse(text_state, voice_state, face_state)
-                dom_emotion = unified_emotion_data["dominant_emotion"]
-                
-                # 5. Format the unified data using the new LLM Adapter layer
-                now_str = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-                
-                raw_inputs = {
-                    "text": text,
-                    "timestamp": now_str,
-                    "voice_emotion": voice_state.get('emotion', 'neutral'),
-                    "face_emotion": face_state.get('emotion', 'neutral')
-                }
-                
-                context = {
-                    "session_id": session_id,
-                    "conversation_history": [
-                        {"role": t["speaker"], "content": t["text"]}
-                        for t in conversation_history
-                    ],
-                    "turns": conversation_history
-                }
-                
-                payload = llm_adapter.process(
-                    fusion_output=unified_emotion_data,
-                    raw_inputs=raw_inputs,
-                    context=context
+                # 4. Process and Print via the Unified Central Pipeline (shares history with Options 1-3)
+                payload = process_and_print_unified_json(
+                    text_state=text_state,
+                    voice_state=voice_state,
+                    face_state=face_state,
+                    raw_text=text,
+                    voice_emo_raw=voice_state.get('emotion', 'neutral'),
+                    face_emo_raw=face_state.get('emotion', 'neutral')
                 )
-                
-                # Append to our local quick history for the next turn
-                turn_record = {
-                    "speaker": "user",
-                    "timestamp": now_str,
-                    "text": text,
-                    "emotion": payload["emotion_analysis"]["dominant_emotion"],
-                    "tone": payload["tone_analysis"]["tone"]
-                }
-                conversation_history.append(turn_record)
-                if len(conversation_history) > 6:
-                    conversation_history.pop(0)
-                
-                print("\n" + "="*80)
-                print(">>> OUTBOUND V2 PAYLOAD")
-                print("="*80)
-                print(json.dumps(payload, indent=2))
-                print("="*80)
                 
                 # Let the assistant react synchronously right after the sentence block
                 # response_engine.react(unified_emotion)  # Removed for json payload only

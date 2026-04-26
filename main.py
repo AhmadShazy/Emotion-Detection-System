@@ -4,6 +4,7 @@ import time
 import datetime
 import subprocess
 import threading
+import numpy as np
 
 # ===============================
 # CONFIG
@@ -57,6 +58,23 @@ except ImportError as e:
     def run_live_streaming_session():
         print("❌ V2 Streaming module not available.")
 
+try:
+    from src.faceexpression.classifier import analyze_openface_csv
+except ImportError as e:
+    print(f"Warning: Could not import OpenFace classifier: {e}")
+    def analyze_openface_csv(csv_path):
+        print("❌ OpenFace classifier not available.")
+        return None
+
+try:
+    import sounddevice as sd
+    from scipy.io.wavfile import write as wav_write
+except ImportError as e:
+    print(f"Warning: Could not import sounddevice/scipy: {e}")
+    sd = None
+    wav_write = None
+
+from src.streaming.unified_pipeline import build_text_state, process_and_print_unified_json
 
 # ===============================
 # OPTION 1 — Text Emotion Analysis
@@ -88,20 +106,17 @@ def run_text_emotion_input():
 
         print("\n🧠 Analyzing emotion...")
         results = analyze_text_emotion(text, threshold=0.05)
+        text_state = build_text_state(text, results)
+        
+        process_and_print_unified_json(
+            text_state=text_state,
+            voice_state=None,
+            face_state=None,
+            raw_text=text,
+            voice_emo_raw="neutral",
+            face_emo_raw="neutral"
+        )
 
-        print("\n" + "="*50)
-        print("📊 TEXT EMOTION REPORT")
-        print("="*50)
-
-        if results:
-            for i, res in enumerate(results[:5]):   # Show top 5
-                bar = "█" * int(res['score'] * 20)
-                print(f"  {'→' if i == 0 else '  '} {res['label']:<18} {res['score']:.2f}  {bar}")
-        else:
-            print("  → Could not determine emotion.")
-
-        print("="*50)
-        print()
 
         again = input("Analyze another? (Enter to continue / 'q' to go back): ").strip().lower()
         if again in ("q", "quit", "exit"):
@@ -115,14 +130,14 @@ def run_text_emotion_input():
 
 def run_voice_combined_pipeline(wav_path=None):
     """
-    Runs SER + Whisper STT + Text Emotion on a voice recording.
-    If wav_path is provided, skips recording and reuses that file.
-    If wav_path is None, records 10 seconds from the microphone first.
-    Returns a dict with keys: ser_result, stt_result, text_emotion_str
+    Runs SER + Whisper STT + Text Emotion on audio.
+    If wav_path is None  → records a fresh 10-second clip first.
+    If wav_path is given → skips recording and reuses that file.
+    Returns (text_state, voice_state, stt_result, ser_result) for callers that need the data.
     """
-    is_standalone = (wav_path is None)  # True when called directly from menu
+    standalone = (wav_path is None)  # True when called directly from Option 2
 
-    if is_standalone:
+    if standalone:
         print("\n==========================================")
         print("🎤 VOICE ANALYSIS")
         print("==========================================")
@@ -133,16 +148,16 @@ def run_voice_combined_pipeline(wav_path=None):
 
     if not SEREngine:
         print("❌ SER Engine not available.")
-        return None
+        return "N/A", "N/A", "N/A"
     if not whisper:
         print("❌ Whisper not available.")
-        return None
+        return "N/A", "N/A", "N/A"
 
-    # ── Step 1: Record Audio (only if not pre-supplied) ──
+    # ── Step 1: Record Audio (only if no file was passed in) ──
     if wav_path is None:
         if not record_audio:
             print("❌ Audio recorder not available.")
-            return None
+            return "N/A", "N/A", "N/A"
 
         DATA_DIR = os.path.join(SCRIPT_DIR, "data", "recordings")
         if not os.path.exists(DATA_DIR):
@@ -158,11 +173,13 @@ def run_voice_combined_pipeline(wav_path=None):
             record_audio(duration=10, filename=wav_path)
         except Exception as e:
             print(f"❌ Recording failed: {e}")
-            return None
+            return "N/A", "N/A", "N/A"
 
         print(f"\n✅ Audio saved: {wav_path}")
-
-    print("-" * 50)
+        print("-" * 50)
+    else:
+        print(f"\n🔁 Reusing recorded audio: {wav_path}")
+        print("-" * 50)
 
     # ── Step 2: SER ──
     ser_result = "N/A"
@@ -187,38 +204,39 @@ def run_voice_combined_pipeline(wav_path=None):
         print(f"⚠️  Transcription failed: {e}")
 
     # ── Step 4: Text Emotion ──
-    text_emotion_str = "N/A"
+    text_state = None
     if stt_result and stt_result != "N/A":
         print("\n💬 Analyzing Text Emotion...")
         try:
             te_results = analyze_text_emotion(stt_result, threshold=0.05)
-            if te_results:
-                text_emotion_str = ", ".join(
-                    [f"{r['label']} ({r['score']:.2f})" for r in te_results[:4]]
-                )
+            text_state = build_text_state(stt_result, te_results)
         except Exception as e:
             print(f"⚠️  Text emotion analysis failed: {e}")
 
-    results = {
-        "ser_result": ser_result,
-        "stt_result": stt_result,
-        "text_emotion_str": text_emotion_str,
-    }
+    voice_state = None
+    if ser_result and ser_result != "N/A":
+        voice_state = {
+            "source": "voice",
+            "emotion": ser_result,
+            "confidence": 0.8,
+            "average_emotion": ser_result,
+            "peak_emotion": ser_result,
+            "reliability": 1.0
+        }
 
-    # ── Print report only when called standalone (Option 2) ──
-    if is_standalone:
-        print("\n" + "="*50)
-        print("📊 VOICE ANALYSIS REPORT")
-        print("="*50)
-        print(f"\n🗣  Speech Emotion:")
-        print(f"   → {ser_result}")
-        print(f"\n📝 Transcription:")
-        print(f"   → \"{stt_result}\"")
-        print(f"\n💬 Text Emotion:")
-        print(f"   → {text_emotion_str}")
-        print("\n" + "="*50 + "\n")
+    # ── Final Report (only when called standalone from Option 2) ──
+    if standalone:
+        process_and_print_unified_json(
+            text_state=text_state,
+            voice_state=voice_state,
+            face_state=None,
+            raw_text=stt_result if stt_result != "N/A" else "",
+            voice_emo_raw=ser_result if ser_result != "N/A" else "neutral",
+            face_emo_raw="neutral"
+        )
+        return
 
-    return results
+    return text_state, voice_state, stt_result, ser_result
 
 
 # ===============================
@@ -226,189 +244,154 @@ def run_voice_combined_pipeline(wav_path=None):
 # ===============================
 
 def run_multimodal_recording():
-    """
-    Records face (OpenFace) and audio simultaneously.
-    User presses Enter to stop both recordings.
-    Then runs: Face analysis + SER + Whisper + Text Emotion.
-    """
     print("\n==========================================")
-    print("🎬 MULTIMODAL RECORDING")
+    print("🎥 MULTIMODAL RECORDING")
     print("==========================================")
     print("This will simultaneously record:")
-    print("  🎥 Webcam  → Face Emotion Analysis (OpenFace)")
-    print("  🎤 Microphone → SER + STT + Text Emotion")
-    print()
-    print("⚠️  A webcam window will open for face recording.")
-    print("🛑 Press ENTER here to stop ALL recordings when done.")
-    print()
+    print("  • 🎥 Face expressions (OpenFace)")
+    print("  • 🎤 Audio (Microphone)")
+    print("\nThen analyse:")
+    print("  • Face Emotion (AU-based classifier)")
+    print("  • Voice Emotion (SER / Wav2Vec2)")
+    print("  • Speech-to-Text (Whisper)")
+    print("  • Text Emotion (RoBERTa)")
 
-    # ── Validate dependencies ──
-    if not record_audio:
-        print("❌ Audio recorder not available.")
+    if sd is None or wav_write is None:
+        print("❌ sounddevice / scipy not available. Cannot record audio.")
+        return
+    if not SEREngine:
+        print("❌ SER Engine not available.")
+        return
+    if not whisper:
+        print("❌ Whisper not available.")
         return
 
-    OPENFACE_EXE = os.path.join(
-        SCRIPT_DIR, "external", "openface",
-        "OpenFace_2.2.0_win_x64", "FeatureExtraction.exe"
-    )
-    PROCESSED_DIR = os.path.join(SCRIPT_DIR, "data", "processed")
-    DATA_DIR = os.path.join(SCRIPT_DIR, "data", "recordings")
+    # ── Paths ──
+    OPENFACE_DIR = os.path.join(SCRIPT_DIR, "external", "openface", "OpenFace_2.2.0_win_x64")
+    OPENFACE_EXE = os.path.join(OPENFACE_DIR, "FeatureExtraction.exe")
+    OUTPUT_DIR   = os.path.join(SCRIPT_DIR, "data", "processed")
+    DATA_DIR     = os.path.join(SCRIPT_DIR, "data", "recordings")
 
-    if not os.path.exists(PROCESSED_DIR):
-        os.makedirs(PROCESSED_DIR)
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
+    for d in (OUTPUT_DIR, DATA_DIR):
+        if not os.path.exists(d):
+            os.makedirs(d)
 
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    wav_path = os.path.join(DATA_DIR, f"multimodal_{timestamp}.wav")
-    csv_name = f"multimodal_{timestamp}"
-    csv_path = os.path.join(PROCESSED_DIR, f"{csv_name}.csv")
+    timestamp        = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    of_filename      = f"multimodal_{timestamp}"
+    csv_path         = os.path.join(OUTPUT_DIR, f"{of_filename}.csv")
+    wav_path         = os.path.join(DATA_DIR,   f"multimodal_{timestamp}.wav")
 
-    openface_process = None
-    audio_exception = [None]   # mutable container for thread error passing
-
-    # ── Audio recording thread ──
-    # We record in 60-second chunks; user stops via Enter before that.
-    # sounddevice non-blocking pattern: start → user stops → sd.stop()
-    try:
-        import sounddevice as sd
-        import numpy as np
-        from scipy.io.wavfile import write as wav_write
-    except ImportError as e:
-        print(f"❌ sounddevice/scipy not available: {e}")
-        return
-
-    FS = 16000
-    MAX_DURATION = 120   # safety cap: 2 minutes
-
-    recorded_chunks = []
-
-    def audio_callback(indata, frames, time_info, status):
-        recorded_chunks.append(indata.copy())
-
-    # ── Start OpenFace (non-blocking) ──
-    if os.path.exists(OPENFACE_EXE):
-        try:
-            openface_cmd = [
-                OPENFACE_EXE,
-                "-device", "0",
-                "-out_dir", PROCESSED_DIR,
-                "-of", csv_name
-            ]
-            cwd = os.path.dirname(OPENFACE_EXE)
-            openface_process = subprocess.Popen(
-                openface_cmd, cwd=cwd,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            print(f"🎥 OpenFace started (PID: {openface_process.pid})")
-        except Exception as e:
-            print(f"⚠️  OpenFace could not start: {e}")
-            openface_process = None
+    # ── Check OpenFace binary exists ──
+    if not os.path.exists(OPENFACE_EXE):
+        print(f"❌ OpenFace executable not found at: {OPENFACE_EXE}")
+        print("   Skipping face recording. Only audio will be analysed.")
+        face_available = False
     else:
-        print(f"⚠️  OpenFace not found at expected path — skipping face recording.")
+        face_available = True
 
-    # ── Start audio (non-blocking InputStream) ──
-    print("🎤 Microphone open — speak now...")
-    print()
-    print("  [ Press ENTER to stop recording ]")
-    print()
+    # ── Audio recording state ──
+    FS           = 16000
+    audio_chunks = []
+    stop_event   = threading.Event()
 
+    def _audio_worker():
+        """Continuously records 0.5-second chunks until stop_event is set."""
+        with sd.InputStream(samplerate=FS, channels=1, dtype='int16') as stream:
+            while not stop_event.is_set():
+                chunk, _ = stream.read(FS // 2)   # 0.5 s chunks
+                audio_chunks.append(chunk.copy())
+
+    # ── 1. Launch OpenFace (non-blocking) ──
+    of_process = None
+    if face_available:
+        of_cmd = [
+            OPENFACE_EXE,
+            "-device", "0",
+            "-out_dir", OUTPUT_DIR,
+            "-of",     of_filename
+        ]
+        try:
+            of_process = subprocess.Popen(of_cmd, cwd=OPENFACE_DIR,
+                                          stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.DEVNULL)
+            print("\n▶  OpenFace launched (non-blocking).")
+        except FileNotFoundError:
+            print("⚠️  Could not launch OpenFace. Face analysis will be skipped.")
+            face_available = False
+
+    # ── 2. Start audio recording thread ──
+    audio_thread = threading.Thread(target=_audio_worker, daemon=True)
+    audio_thread.start()
+
+    # ── 3. Wait for user to stop ──
+    print("\n🔴 RECORDING — press Enter to stop...")
     start_time = time.time()
-
     try:
-        stream = sd.InputStream(
-            samplerate=FS,
-            channels=1,
-            dtype="float32",
-            callback=audio_callback
-        )
-        stream.start()
-    except Exception as e:
-        print(f"❌ Could not open microphone: {e}")
-        if openface_process:
-            openface_process.terminate()
-        return
-
-    # ── Wait for user to press Enter ──
-    try:
-        input()   # blocks until Enter
+        input()                        # blocks until Enter
     except (KeyboardInterrupt, EOFError):
         pass
-
     elapsed = time.time() - start_time
+    print(f"\n⏱  Recorded {elapsed:.1f} s.")
 
-    # ── Stop audio ──
-    stream.stop()
-    stream.close()
-    print(f"\n🔇 Microphone closed. ({elapsed:.1f}s recorded)")
+    # ── 4. Stop both streams ──
+    stop_event.set()
+    audio_thread.join(timeout=3)
 
-    # ── Stop OpenFace ──
-    if openface_process and openface_process.poll() is None:
-        openface_process.terminate()
+    if of_process is not None and of_process.poll() is None:
+        of_process.terminate()
         try:
-            openface_process.wait(timeout=5)
+            of_process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            openface_process.kill()
-        print("🎥 OpenFace stopped.")
+            of_process.kill()
+        print("✅ OpenFace stopped.")
 
-    # ── Save WAV ──
-    if recorded_chunks:
-        audio_data = np.concatenate(recorded_chunks, axis=0)
-        audio_int16 = (audio_data * 32767).astype(np.int16)
-        wav_write(wav_path, FS, audio_int16)
+    # ── 5. Save WAV ──
+    if audio_chunks:
+        audio_data = np.concatenate(audio_chunks, axis=0)
+        wav_write(wav_path, FS, audio_data)
         print(f"✅ Audio saved: {wav_path}")
     else:
-        print("⚠️  No audio was captured.")
+        print("⚠️  No audio captured.")
         wav_path = None
 
-    print()
-    print("="*50)
-    print("🧠 RUNNING ANALYSIS...")
-    print("="*50)
+    # ── 6. Post-processing ──
+    print("\n" + "="*60)
+    print("⚙️  POST-PROCESSING — please wait...")
+    print("="*60)
 
-    # ── Voice + STT + Text Emotion (reuse Option 2) ──
-    voice_results = None
+    # 6a. Voice pipeline (reuse Option 2, skip recording)
+    ser_result      = "N/A"
+    stt_result      = "N/A"
+    text_state      = None
+    voice_state     = None
     if wav_path and os.path.exists(wav_path):
-        voice_results = run_voice_combined_pipeline(wav_path=wav_path)
-    else:
-        print("⚠️  Skipping voice analysis — no audio file.")
+        text_state, voice_state, stt_result, ser_result = run_voice_combined_pipeline(wav_path=wav_path)
 
-    # ── Face Emotion Analysis ──
+    # 6b. Face analysis
     face_timeline = "N/A"
-    if os.path.exists(csv_path):
-        try:
-            from src.faceexpression.classifier import analyze_openface_csv
-            print("\n🙂 Analyzing Face Expressions...")
-            time.sleep(1)   # brief buffer for OpenFace file I/O to flush
-            face_timeline = analyze_openface_csv(csv_path) or "N/A"
-        except Exception as e:
-            print(f"⚠️  Face analysis failed: {e}")
-    else:
-        print("⚠️  Face CSV not found — face analysis skipped.")
+    face_state = None
+    if face_available:
+        time.sleep(1)   # short buffer for OpenFace to flush CSV
+        if os.path.exists(csv_path):
+            print("\n🙂 Analysing face expressions...")
+            face_timeline, face_state = analyze_openface_csv(csv_path)
+            if not face_timeline:
+                face_timeline = "No valid face frames detected."
+        else:
+            print(f"⚠️  OpenFace CSV not found: {csv_path}")
+            face_timeline = "CSV not generated."
 
-    # ── Combined Final Report ──
-    ser_result = voice_results["ser_result"] if voice_results else "N/A"
-    stt_result = voice_results["stt_result"] if voice_results else "N/A"
-    text_emotion_str = voice_results["text_emotion_str"] if voice_results else "N/A"
-
-    print()
-    print("="*60)
-    print("📊 MULTIMODAL ANALYSIS REPORT")
-    print("="*60)
-    print(f"\n📝 Transcription:")
-    print(f"   → \"{stt_result}\"")
-    print(f"\n💬 Text Emotion:")
-    print(f"   → {text_emotion_str}")
-    print(f"\n🗣  Voice Emotion (SER):")
-    print(f"   → {ser_result}")
-    print(f"\n🙂 Face Emotion Timeline:")
-    if face_timeline and face_timeline != "N/A":
-        for line in face_timeline.strip().splitlines():
-            print(f"   {line}")
-    else:
-        print("   → N/A")
-    print()
-    print("="*60 + "\n")
+    # ── 7. Combined Report ──
+    face_emo_raw = face_state["emotion"] if face_state else "neutral"
+    
+    process_and_print_unified_json(
+        text_state=text_state,
+        voice_state=voice_state,
+        face_state=face_state,
+        raw_text=stt_result if stt_result != "N/A" else "",
+        voice_emo_raw=ser_result if ser_result != "N/A" else "neutral",
+        face_emo_raw=face_emo_raw
+    )
 
 
 # ===============================
@@ -422,7 +405,7 @@ def main():
         print("==========================================")
         print("  1. 💬 Text Emotion Analysis  (Keyboard Input)")
         print("  2. 🎤 Voice Analysis          (Speech + Emotion)")
-        print("  3. 🎬 Multimodal Recording    (Video + Voice Analysis)")
+        print("  3. 🎥 Multimodal Recording      (Video + Voice)")
         print("  4. 🌐 Live Multimodal Chat    (Real-Time Streaming)")
         print("  5. 🚪 Exit")
         print("==========================================")
