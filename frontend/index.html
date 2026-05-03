@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Humanoid Assistant V2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="logo">
+            <span class="logo-icon">🤖</span>
+            <h1>Humanoid Assistant</h1>
+        </div>
+        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
+            <span class="icon-sun">☀️</span>
+            <span class="icon-moon">🌙</span>
+        </button>
+    </header>
+
+    <main class="container">
+        <!-- Toast Notifications -->
+        <div id="toast-container" class="toast-container"></div>
+
+        <section class="analysis-panel glass-card">
+            <nav class="tabs">
+                <button class="tab-btn active" data-tab="text">💬 Text</button>
+                <button class="tab-btn" data-tab="voice">🎤 Voice</button>
+                <button class="tab-btn" data-tab="multimodal">🎥 Multimodal</button>
+                <button class="tab-btn" data-tab="stream">🌐 Live Stream</button>
+            </nav>
+
+            <div class="tab-contents">
+                <!-- Text Tab -->
+                <div id="tab-text" class="tab-pane active">
+                    <h2>Text Emotion Analysis</h2>
+                    <p class="subtitle">Analyze text using the RoBERTa model.</p>
+                    <textarea id="text-input" placeholder="Type your message here..."></textarea>
+                    <button id="btn-analyze-text" class="primary-btn">Analyze Text</button>
+                </div>
+
+                <!-- Voice Tab -->
+                <div id="tab-voice" class="tab-pane">
+                    <h2>Voice Emotion Analysis</h2>
+                    <p class="subtitle">Upload a .wav file or record your voice directly.</p>
+                    
+                    <div class="voice-controls">
+                        <div class="record-section">
+                            <button id="btn-record-voice" class="record-btn">
+                                <span class="record-icon">⏺</span> Record Voice
+                            </button>
+                            <span id="record-status" class="status-text">Ready</span>
+                        </div>
+                        
+                        <div class="divider">OR</div>
+                        
+                        <div class="upload-section">
+                            <input type="file" id="voice-file" accept=".wav" class="file-input">
+                            <label for="voice-file" class="file-label">Choose .wav File</label>
+                            <span id="file-name" class="status-text">No file chosen</span>
+                        </div>
+                    </div>
+                    
+                    <button id="btn-analyze-voice" class="primary-btn" disabled>Analyze Voice</button>
+                </div>
+
+                <!-- Multimodal Tab -->
+                <div id="tab-multimodal" class="tab-pane">
+                    <h2>Multimodal Recording</h2>
+                    <div class="info-banner">
+                        <span class="banner-icon">ℹ️</span>
+                        <p>This will start recording using the <strong>server's</strong> camera and microphone. Ensure they are connected.</p>
+                    </div>
+                    <p class="subtitle">Maximum duration: 30 seconds.</p>
+                    
+                    <div class="multimodal-controls">
+                        <button id="btn-start-multimodal" class="primary-btn">Start Recording</button>
+                        <button id="btn-stop-multimodal" class="danger-btn" style="display: none;">Stop Recording</button>
+                    </div>
+                    
+                    <div class="recording-timer" id="multimodal-timer" style="display: none;">
+                        <span class="pulse-dot"></span>
+                        <span id="timer-display">00:00</span> / 00:30
+                    </div>
+                </div>
+
+                <!-- Stream Tab -->
+                <div id="tab-stream" class="tab-pane">
+                    <h2>Live Multimodal Stream</h2>
+                    <p class="subtitle">Real-time analysis using server's camera and mic.</p>
+                    
+                    <div class="stream-controls">
+                        <button id="btn-connect-stream" class="primary-btn">Connect Stream</button>
+                        <button id="btn-disconnect-stream" class="danger-btn" style="display: none;">Disconnect</button>
+                    </div>
+                    
+                    <div id="stream-status-container" class="status-container" style="display: none;">
+                        <span class="pulse-dot"></span>
+                        <span id="stream-status-text">Connecting...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loading Spinner -->
+            <div id="loading-overlay" class="loading-overlay" style="display: none;">
+                <div class="spinner"></div>
+                <p>Analyzing...</p>
+            </div>
+        </section>
+
+        <!-- Results Section -->
+        <section id="results-panel" class="results-panel glass-card" style="display: none;">
+            <h2>Analysis Results</h2>
+            <div class="results-header">
+                <div class="user-input-display">
+                    <h3>Input</h3>
+                    <p id="res-text">...</p>
+                    <small id="res-time" class="timestamp">...</small>
+                </div>
+            </div>
+
+            <div class="results-grid">
+                <!-- Dominant Emotion Card -->
+                <div class="result-card dominant-emotion">
+                    <h3>Dominant Emotion</h3>
+                    <div class="emotion-display">
+                        <span id="res-dominant-emo" class="emotion-name">Neutral</span>
+                        <span id="res-dominant-conf" class="emotion-conf">0%</span>
+                    </div>
+                </div>
+
+                <!-- Tone Analysis Card -->
+                <div class="result-card tone-analysis">
+                    <h3>Tone Analysis</h3>
+                    <div class="tone-display">
+                        <span id="res-tone" class="tone-name">Neutral</span>
+                        <span id="res-tone-conf" class="tone-conf">0%</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Emotion Probabilities -->
+            <div class="probabilities-section">
+                <h3>Emotion Probabilities</h3>
+                <div id="prob-bars" class="prob-bars-container">
+                    <!-- Bars injected via JS -->
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>

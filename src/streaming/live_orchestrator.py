@@ -144,3 +144,123 @@ def run_live_streaming_session():
 
 if __name__ == "__main__":
     run_live_streaming_session()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# WebSocket-friendly variant — used by routers/stream.py
+# The original run_live_streaming_session() above is NOT modified.
+# ════════════════════════════════════════════════════════════════════════════
+
+def run_live_streaming_session_ws(on_payload, stop_event):
+    """
+    Identical to run_live_streaming_session() with two differences:
+
+    1. Shutdown is driven by stop_event (threading.Event) instead of
+       KeyboardInterrupt — the WebSocket router sets this when the client
+       disconnects.
+
+    2. process_and_print_unified_json() is called with on_payload=on_payload
+       so each turn's result is pushed to the WebSocket client in addition
+       to being printed server-side.
+
+    Parameters
+    ----------
+    on_payload  : callable(dict) — called with the payload after each turn.
+                  The WebSocket router passes a thread-safe send wrapper here.
+    stop_event  : threading.Event — when set, the session loop exits cleanly.
+    """
+    print("\n=======================================================")
+    print(">>> HUMANOID ASSISTANT V2.1 - LIVE STREAM (WebSocket)")
+    print("=======================================================")
+
+    # ── Queues ────────────────────────────────────────────────────────────────
+    stt_audio_queue = queue.Queue(maxsize=100)
+    ser_audio_queue = queue.Queue(maxsize=100)
+    text_stt_queue  = queue.Queue()
+    ui_status_queue = queue.Queue()
+
+    print("\n[INIT] Booting components...")
+
+    from src.text_emotion.analysis import load_emotion_model
+    load_emotion_model()
+
+    # ── Workers ───────────────────────────────────────────────────────────────
+    audio_streamer = AudioStreamer()
+    audio_streamer.add_queue(stt_audio_queue)
+    audio_streamer.add_queue(ser_audio_queue)
+
+    stt_worker = StreamingSTT(
+        audio_queue=stt_audio_queue,
+        text_queue=text_stt_queue,
+        status_queue=ui_status_queue,
+        model_size="tiny",
+        trailing_silence_seconds=1.5,
+    )
+    ser_worker  = StreamingSER(audio_queue=ser_audio_queue, emotion_queue=None)
+
+    timestamp    = time.strftime("%Y-%m-%d-%H-%M-%S")
+    csv_path     = os.path.join(PROJECT_ROOT, "data", "processed", f"ws_stream_{timestamp}.csv")
+    openface_exe = os.path.join(PROJECT_ROOT, "external", "openface",
+                                "OpenFace_2.2.0_win_x64", "FeatureExtraction.exe")
+    face_worker  = StreamingFace(face_queue=None, csv_path=csv_path, openface_exe=openface_exe)
+
+    try:
+        stt_worker.start()
+        ser_worker.start()
+        face_worker.start()
+        audio_streamer.start()
+
+        print("\n[OK] WS Stream live — waiting for speech...")
+
+        # ── Main turn loop ─────────────────────────────────────────────────
+        while not stop_event.is_set():
+            try:
+                # Non-blocking UI status update
+                try:
+                    ui_state = ui_status_queue.get_nowait()
+                    print(f"\r[ {'🎤 Listening' if ui_state == 'LISTENING' else '⚙️  Analyzing'}... ]", end="", flush=True)
+                except queue.Empty:
+                    pass
+
+                # Wait for STT to yield a transcribed sentence (short timeout
+                # so we can keep checking stop_event)
+                text = text_stt_queue.get(timeout=0.1)
+
+                # Text emotion
+                text_emotions = analyze_text_emotion(text, threshold=0.1)
+                text_state    = build_text_state(text, text_emotions)
+
+                # Snapshot SER + Face
+                voice_state = ser_worker.get_current_emotion()
+                face_state  = face_worker.get_current_emotion()
+
+                # Push through unified pipeline — on_payload sends to WS client
+                process_and_print_unified_json(
+                    text_state=text_state,
+                    voice_state=voice_state,
+                    face_state=face_state,
+                    raw_text=text,
+                    voice_emo_raw=voice_state.get("emotion", "neutral") if voice_state else "neutral",
+                    face_emo_raw=face_state.get("emotion", "neutral") if face_state else "neutral",
+                    on_payload=on_payload,
+                )
+
+                # Clear buffers for next turn
+                ser_worker.clear_buffer()
+                face_worker.clear_buffer()
+
+                print("\r[ 💤 Waiting for speech... ]", end="", flush=True)
+
+            except queue.Empty:
+                time.sleep(0.01)
+
+    finally:
+        audio_streamer.stop()
+        stt_worker.stop()
+        ser_worker.stop()
+        face_worker.stop()
+
+        stt_worker.join(timeout=2)
+        ser_worker.join(timeout=2)
+        face_worker.join(timeout=2)
+        print("\n[OK] WS stream shutdown complete.")

@@ -45,10 +45,19 @@ def build_text_state(text, te_results):
         
     return text_state
 
-def process_and_print_unified_json(text_state, voice_state, face_state, raw_text, voice_emo_raw, face_emo_raw):
+def process_and_print_unified_json(
+    text_state, voice_state, face_state,
+    raw_text, voice_emo_raw, face_emo_raw,
+    on_payload=None
+):
     """
     Routes given states through the central EmotionStateManager and LLMAdapter,
     updates the conversation context, and prints the final V2 JSON payload.
+
+    on_payload (optional callable):
+        If provided, called with the payload dict immediately after printing.
+        Used by the WebSocket router to push each turn's result to the client.
+        All CLI / live-orchestrator callers omit this — it defaults to None (no-op).
     """
     state_manager, llm_adapter = get_pipeline()
     
@@ -92,11 +101,16 @@ def process_and_print_unified_json(text_state, voice_state, face_state, raw_text
     if len(GLOBAL_CONVERSATION_HISTORY) > 6:
         GLOBAL_CONVERSATION_HISTORY.pop(0)
         
-    # 5. Print the Output
+    # 5. Print the Output  (server-side log — harmless in API mode)
     print("\n" + "="*80)
     print(">>> OUTBOUND V2 PAYLOAD")
     print("="*80)
     print(json.dumps(payload, indent=2))
     print("="*80)
-    
+
+    # 6. Optional push callback — WebSocket router passes websocket.send_json here.
+    #    Every other caller (CLI, live_orchestrator) leaves this as None.
+    if on_payload is not None:
+        on_payload(payload)
+
     return payload
