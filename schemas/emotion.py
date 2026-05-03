@@ -28,10 +28,22 @@ class TextAnalysisRequest(BaseModel):
         description="The raw text to analyze for emotion.",
         examples=["I feel really happy today!"],
     )
+    session_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional session ID from a previous response. "
+            "Pass it to continue an existing conversation with history. "
+            "Omit it on first request — a new session is created automatically."
+        ),
+        examples=["sess-a1b2c3d4"],
+    )
 
     class Config:
         json_schema_extra = {
-            "example": {"text": "I feel really happy today!"}
+            "example": {
+                "text": "I feel really happy today!",
+                "session_id": "sess-a1b2c3d4"
+            }
         }
 
 
@@ -55,17 +67,15 @@ class MultimodalStopRequest(BaseModel):
 
 
 # ============================================================
-# NESTED SUB-MODELS  (building blocks for the response)
+# NESTED SUB-MODELS
 # ============================================================
 
 class UserInput(BaseModel):
-    """The raw input captured during the analysis turn."""
     text: str = Field(description="Transcribed or submitted text.")
     timestamp: str = Field(description="ISO-8601 UTC timestamp of the analysis.")
 
 
 class EmotionAnalysis(BaseModel):
-    """Fused emotion output from EmotionStateManager + LLMAdapter."""
     dominant_emotion: str = Field(description="The top emotion after fusion.")
     confidence: float = Field(ge=0.0, le=1.0)
     emotion_probabilities: Dict[str, float] = Field(
@@ -74,25 +84,21 @@ class EmotionAnalysis(BaseModel):
 
 
 class ToneAnalysis(BaseModel):
-    """How the user spoke, separate from what they felt."""
     tone: str = Field(description="e.g. 'cheerful', 'somber', 'measured'.")
     confidence: float = Field(ge=0.0, le=1.0)
 
 
 class ConversationTurn(BaseModel):
-    """A single turn in the conversation history."""
     role: str = Field(description="'user' or 'assistant'.")
     content: str = Field(description="The spoken/typed text of this turn.")
 
 
 class ConversationContextBlock(BaseModel):
-    """Sliding window of recent conversation turns for LLM context."""
     window_size: int = Field(description="Max turns retained (always 6).")
     turns: List[Dict[str, Any]] = Field(description="Full turn records with emotion/tone metadata.")
 
 
 class ContextBlock(BaseModel):
-    """Short-form conversation history (role + content only)."""
     conversation_history: List[ConversationTurn]
 
 
@@ -104,10 +110,15 @@ class UnifiedEmotionResponse(BaseModel):
     """
     The canonical V2 payload produced by process_and_print_unified_json().
     All four API modes (text, voice, multimodal, stream) return this shape.
-
-    Maps 1-to-1 to the dict returned by LLMAdapter.process().
+    The session_id in the response is what the client should pass back
+    in subsequent requests to maintain conversation continuity.
     """
-    session_id: str = Field(description="Shared session ID (persists across turns).")
+    session_id: str = Field(
+        description=(
+            "Session ID for this conversation. "
+            "Pass this back in subsequent requests to maintain history."
+        )
+    )
     user_input: UserInput
     emotion_analysis: EmotionAnalysis
     tone_analysis: ToneAnalysis
@@ -115,15 +126,13 @@ class UnifiedEmotionResponse(BaseModel):
     conversation_context: ConversationContextBlock
 
     class Config:
-        # Allow extra fields from the pipeline without raising validation errors.
-        # This future-proofs the schema as llm_adapter.py evolves.
         extra = "allow"
         json_schema_extra = {
             "example": {
                 "session_id": "sess-a1b2c3d4",
                 "user_input": {
                     "text": "I feel really happy today!",
-                    "timestamp": "2026-05-03T00:00:00Z"
+                    "timestamp": "2026-05-04T00:00:00Z"
                 },
                 "emotion_analysis": {
                     "dominant_emotion": "joy",
@@ -151,7 +160,6 @@ class UnifiedEmotionResponse(BaseModel):
         }
 
 
-# Explicit alias for clarity in voice router
 VoiceAnalysisResponse = UnifiedEmotionResponse
 
 
@@ -160,16 +168,11 @@ VoiceAnalysisResponse = UnifiedEmotionResponse
 # ============================================================
 
 class MultimodalSessionStarted(BaseModel):
-    """
-    Returned immediately after POST /analyze/multimodal/start.
-    The client stores session_id and uses it to call /stop.
-    """
     session_id: str = Field(description="Unique ID for this recording session.")
-    status: str = Field(default="recording", description="Always 'recording' on success.")
-    max_duration_seconds: int = Field(default=30, description="Server-enforced hard cap.")
+    status: str = Field(default="recording")
+    max_duration_seconds: int = Field(default=30)
     message: str = Field(
-        default="Recording started. Call POST /analyze/multimodal/stop when done.",
-        description="Human-readable next-step instruction.",
+        default="Recording started. Call POST /analyze/multimodal/stop when done."
     )
 
 
@@ -178,6 +181,5 @@ class MultimodalSessionStarted(BaseModel):
 # ============================================================
 
 class ErrorResponse(BaseModel):
-    """Standard error shape returned on 4xx / 5xx responses."""
     detail: str = Field(description="Human-readable error description.")
-    code: Optional[str] = Field(default=None, description="Optional machine-readable error code.")
+    code: Optional[str] = Field(default=None)

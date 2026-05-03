@@ -2,7 +2,8 @@
 routers/text.py
 
 POST /analyze/text
-Accepts raw text → runs the full emotion pipeline → returns UnifiedEmotionResponse.
+Accepts raw text + optional session_id → runs the full emotion pipeline
+→ returns UnifiedEmotionResponse.
 
 Chain:
     TextAnalysisRequest.text
@@ -34,7 +35,9 @@ router = APIRouter()
     summary="Text Emotion Analysis",
     description=(
         "Submit a piece of text and receive the full V2 emotion payload. "
-        "Internally runs RoBERTa → Fusion Engine → LLM Adapter."
+        "Pass the same `session_id` across requests to maintain conversation "
+        "history and emotion trend tracking. Omit it on first request — a new "
+        "session is created automatically and its ID is returned in the payload."
     ),
 )
 async def analyze_text(request: TextAnalysisRequest):
@@ -43,7 +46,6 @@ async def analyze_text(request: TextAnalysisRequest):
     Heavy ML inference is offloaded to a thread so the event loop stays free.
     """
     try:
-        # Run blocking ML inference in a thread pool (keeps event loop unblocked)
         def _run():
             text_state = process_text_emotion(request.text)
             return process_and_print_unified_json(
@@ -53,6 +55,7 @@ async def analyze_text(request: TextAnalysisRequest):
                 raw_text=request.text,
                 voice_emo_raw="neutral",
                 face_emo_raw="neutral",
+                session_id=request.session_id,   # None = auto-create new session
             )
 
         payload = await asyncio.to_thread(_run)

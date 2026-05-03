@@ -63,7 +63,7 @@ header {
     padding: 1rem 2rem;
     background-color: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .logo {
@@ -95,19 +95,77 @@ header {
     background-color: var(--border-color);
 }
 
-[data-theme="dark"] .icon-sun { display: inline; }
-[data-theme="dark"] .icon-moon { display: none; }
-[data-theme="light"] .icon-sun { display: none; }
-[data-theme="light"] .icon-moon { display: inline; }
+[data-theme="dark"] .icon-sun {
+    display: inline;
+}
 
-/* Container */
-.container {
-    max-width: 800px;
+[data-theme="dark"] .icon-moon {
+    display: none;
+}
+
+[data-theme="light"] .icon-sun {
+    display: none;
+}
+
+[data-theme="light"] .icon-moon {
+    display: inline;
+}
+
+/* Main Layout */
+.main-wrapper {
+    max-width: 1200px;
     margin: 2rem auto;
     padding: 0 1rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 400px;
+    gap: 2rem;
+    align-items: start;
+}
+
+.content-column {
     display: flex;
     flex-direction: column;
     gap: 2rem;
+}
+
+@media (max-width: 900px) {
+    .main-wrapper {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* JSON Panel */
+.json-panel {
+    position: sticky;
+    top: 2rem;
+    max-height: calc(100vh - 4rem);
+    display: flex;
+    flex-direction: column;
+}
+
+.json-panel h2 {
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.json-container {
+    overflow-y: auto;
+    background-color: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    flex-grow: 1;
+}
+
+.json-container pre {
+    margin: 0;
+    font-family: monospace;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: var(--text-primary);
 }
 
 /* Glass Cards */
@@ -198,7 +256,8 @@ textarea:focus {
     border-color: var(--primary-color);
 }
 
-.primary-btn, .danger-btn {
+.primary-btn,
+.danger-btn {
     padding: 0.75rem 1.5rem;
     border: none;
     border-radius: 0.5rem;
@@ -226,7 +285,8 @@ textarea:focus {
     cursor: not-allowed;
 }
 
-.primary-btn:active:not(:disabled), .danger-btn:active:not(:disabled) {
+.primary-btn:active:not(:disabled),
+.danger-btn:active:not(:disabled) {
     transform: scale(0.98);
 }
 
@@ -251,7 +311,8 @@ textarea:focus {
     border: 1px dashed var(--border-color);
 }
 
-.record-section, .upload-section {
+.record-section,
+.upload-section {
     display: flex;
     align-items: center;
     gap: 1rem;
@@ -318,7 +379,8 @@ textarea:focus {
     position: relative;
 }
 
-.divider::before, .divider::after {
+.divider::before,
+.divider::after {
     content: "";
     position: absolute;
     top: 50%;
@@ -327,8 +389,13 @@ textarea:focus {
     background-color: var(--border-color);
 }
 
-.divider::before { left: 0; }
-.divider::after { right: 0; }
+.divider::before {
+    left: 0;
+}
+
+.divider::after {
+    right: 0;
+}
 
 /* Multimodal & Stream */
 .info-banner {
@@ -345,7 +412,8 @@ textarea:focus {
     font-size: 1.25rem;
 }
 
-.recording-timer, .status-container {
+.recording-timer,
+.status-container {
     margin-top: 1rem;
     font-family: monospace;
     font-size: 1.2rem;
@@ -367,7 +435,10 @@ textarea:focus {
 /* Loading Overlay */
 .loading-overlay {
     position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
     background-color: var(--glass-bg);
     backdrop-filter: blur(4px);
     display: flex;
@@ -437,7 +508,8 @@ textarea:focus {
     margin-bottom: 0.75rem;
 }
 
-.emotion-name, .tone-name {
+.emotion-name,
+.tone-name {
     display: block;
     font-size: 1.5rem;
     font-weight: 700;
@@ -445,7 +517,8 @@ textarea:focus {
     margin-bottom: 0.25rem;
 }
 
-.emotion-conf, .tone-conf {
+.emotion-conf,
+.tone-conf {
     font-size: 0.9rem;
     color: var(--text-secondary);
 }
@@ -510,34 +583,69 @@ textarea:focus {
     color: white;
     padding: 1rem;
     border-radius: 0.5rem;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     animation: slideIn 0.3s ease-out;
     max-width: 300px;
 }
 
 /* Animations */
 @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(5px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 @keyframes pulse {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.02); }
-    100% { transform: scale(1); }
+    0% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.02);
+    }
+
+    100% {
+        transform: scale(1);
+    }
 }
 
 @keyframes pulse-dot {
-    0% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.5; transform: scale(1.2); }
-    100% { opacity: 1; transform: scale(1); }
+    0% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.5;
+        transform: scale(1.2);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
 @keyframes slideIn {
-    from { transform: translateX(100%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
 }

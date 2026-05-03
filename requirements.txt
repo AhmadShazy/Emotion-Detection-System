@@ -21,3 +21,8 @@ pandas
 requests
 huggingface_hub
 tqdm
+
+# Web Server & API
+fastapi
+uvicorn
+python-multipart
