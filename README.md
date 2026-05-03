@@ -4,6 +4,22 @@ A modular, multimodal emotion-analysis system capable of analyzing emotion from 
 
 ---
 
+## Recent Updates
+
+### Patch Release — Bug Fixes (May 4, 2026)
+Resolved 9 confirmed bugs identified during a deep audit of the codebase, focusing on backend stability, thread safety, and frontend-backend communication.
+1. **Critical — FastAPI Startup Crash:** Prevented startup crashes by deferring CSV loading in `classifier.py`.
+2. **Critical — Multimodal Auto-Stop:** Fixed memory leaks and race conditions by fully cleaning up sessions in a background thread.
+3. **Critical — Browser Audio Encoding:** Replaced `MediaRecorder` with a custom `AudioContext` pipeline to generate true 16kHz PCM WAV files in the browser, resolving backend parsing crashes.
+4. **Critical — Thread Safety:** Replaced global variables in the unified pipeline with thread-safe, auto-expiring per-session state stores.
+5. **Medium — OpenFace CSV Reading:** Switched to `iloc`-based incremental reading to preserve headers and fix AU column lookup errors.
+6. **Medium — Torchaudio Monkeypatch:** Wrapped compatibility patches in an idempotent initialization function to prevent import side effects.
+7. **Medium — Temp File Cleanup:** Moved temporary file deletion to occur after payload creation to ensure accurate responses and aid debugging.
+8. **Low — WebSocket URLs:** Frontend now dynamically derives the WebSocket URL from `API_BASE`.
+9. **Low — Dependencies:** Added missing web framework dependencies (`fastapi`, `uvicorn`, etc.) to `requirements.txt`.
+
+---
+
 ## Project Structure
 
 ```
