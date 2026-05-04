@@ -1,71 +1,69 @@
-import os
-from transformers import pipeline
+"""
+src/text_emotion/analysis.py
+=============================
+Text emotion analysis using RoBERTa (go_emotions).
+Model is owned by ModelRegistry — never loaded here directly.
+"""
 
-# Global variable to cache the pipeline so we don't reload it every time
-_emotion_pipeline = None
+from src.core.model_registry import registry
+
 
 def load_emotion_model():
-    global _emotion_pipeline
-    if _emotion_pipeline is None:
-        print("[INFO] Loading Text Emotion Model (SamLowe/roberta-base-go_emotions)...")
-        try:
-            # top_k=None returns all scores. We can also use a specific number.
-            # But we want to filter by threshold mostly.
-            _emotion_pipeline = pipeline("text-classification", 
-                                       model="SamLowe/roberta-base-go_emotions", 
-                                       top_k=None)
-            print("✅ Text Emotion Model loaded.")
-        except Exception as e:
-            print(f"❌ Error loading Text Emotion Model: {e}")
-            _emotion_pipeline = None
-    return _emotion_pipeline
-
-def analyze_text_emotion(text, threshold=0.1):
     """
-    Analyzes the emotion of the given text using a multi-label model.
-    Returns a list of dicts [{'label': 'joy', 'score': 0.9}, ...] 
-    filtering for scores > threshold.
+    Kept for backward compatibility with any code that calls it.
+    Actual loading is done by registry.load_all() at startup.
+    This is now a no-op.
+    """
+    pass
+
+
+def analyze_text_emotion(text: str, threshold: float = 0.1) -> list:
+    """
+    Analyzes emotion of given text using RoBERTa go_emotions model.
+
+    Args:
+        text:      Raw input string to classify.
+        threshold: Minimum score to include a label. Default 0.1.
+
+    Returns:
+        List of dicts sorted by score descending:
+        [{"label": "joy", "score": 0.91}, {"label": "optimism", "score": 0.45}, ...]
+        Returns [] if text is empty or model unavailable.
     """
     if not text or not text.strip():
         return []
 
-    pipe = load_emotion_model()
-    if pipe is None:
+    # Graceful degradation — if registry failed to load roberta,
+    # return empty instead of crashing the whole request
+    if not registry.is_available("roberta"):
+        print("[TextEmotion] ⚠️  RoBERTa unavailable — returning empty.")
         return []
 
     try:
-        # Pipeline with top_k=None returns a list of dicts (all labels)
+        pipe    = registry.get("roberta")
         results = pipe(text)
-        
-        # Determine format and extract
-        # results might be [[{'label': 'joy', 'score': 0.9}, ...]] if input is a list or single string depending on version
-        if isinstance(results, list) and len(results) > 0:
-            if isinstance(results[0], list): 
-                # [[...]] format
-                predictions = results[0]
-            else:
-                # [...] format (unlikely with text-classification usually, but just in case)
-                predictions = results
 
-            # Filter by threshold and sort by score descending
-            filtered_emotions = [
-                {'label': p['label'], 'score': p['score']} 
-                for p in predictions 
-                if p['score'] > threshold
+        # HuggingFace pipeline returns [[{...}]] for single string input
+        if isinstance(results, list) and len(results) > 0:
+            predictions = results[0] if isinstance(results[0], list) else results
+
+            filtered = [
+                {"label": p["label"], "score": p["score"]}
+                for p in predictions
+                if p["score"] > threshold
             ]
-            
-            # Sort just in case the pipeline didn't (it usually does by score if top_k is set, but top_k=None might vary)
-            filtered_emotions.sort(key=lambda x: x['score'], reverse=True)
-            
-            return filtered_emotions
-            
+            filtered.sort(key=lambda x: x["score"], reverse=True)
+            return filtered
+
     except Exception as e:
-        print(f"❌ Error analyzing text emotion: {e}")
-        return []
+        print(f"[TextEmotion] ❌ Error: {e}")
+
+    return []
+
 
 if __name__ == "__main__":
-    # Test
-    sample_text = "I am so happy that this is working!"
-    print(f"Testing with: '{sample_text}'")
-    result = analyze_text_emotion(sample_text)
-    print(f"Result: {result}")
+    # Quick test — only works after registry.load_all() has run
+    from src.core.model_registry import registry
+    registry.load_all()
+    result = analyze_text_emotion("I am so happy this is working!")
+    print(result)

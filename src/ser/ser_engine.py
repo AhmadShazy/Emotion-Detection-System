@@ -1,3 +1,11 @@
+"""
+src/ser/ser_engine.py
+======================
+Speech Emotion Recognition using SpeechBrain Wav2Vec2 IEMOCAP.
+Model is owned by ModelRegistry — SEREngine is now a thin wrapper
+that gets the classifier from the registry instead of loading it.
+"""
+
 import torch
 import torchaudio
 import soundfile as sf
@@ -5,29 +13,39 @@ import numpy as np
 import sys
 import os
 
-# ── Compatibility patches ─────────────────────────────────────────────────────
-# These fix two version mismatches between SpeechBrain 1.0.3 and newer libs.
-# They are applied ONCE inside _apply_patches() which is called only from
-# SEREngine.__init__() — NOT at module import time.
-# This prevents side effects on any other module that imports torchaudio.
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 
 def _apply_patches():
     """
-    Applies all compatibility patches needed for SpeechBrain + newer libs.
-    Safe to call multiple times (idempotent).
+    Compatibility patches for SpeechBrain 1.0.3 + newer libs.
+    Order matters — torchaudio must be patched before speechbrain import.
+    Still called here so ser_engine works correctly when used standalone
+    via CLI (main.py). Registry calls its own copy before loading the model.
     """
+    # ── Patch 1: torchaudio — MUST come first ─────────────────────────────────
+    if not hasattr(torchaudio, "list_audio_backends"):
+        torchaudio.list_audio_backends = lambda: ["soundfile"]
 
-    # ── Patch 1: transformers.AutoModelWithLMHead removed in v5 ──────────────
-    # SpeechBrain 1.0.3 tries to import it. We alias it to AutoModelForCausalLM.
+    if not hasattr(torchaudio, "get_audio_backend"):
+        torchaudio.get_audio_backend = lambda: "soundfile"
+
+    if not getattr(torchaudio, "_patched_by_ser_engine", False):
+        torchaudio.load = _custom_load
+        torchaudio._patched_by_ser_engine = True
+
+    # ── Patch 2: transformers removed AutoModelWithLMHead in v5 ──────────────
     import transformers
     if not hasattr(transformers, "AutoModelWithLMHead"):
-        if hasattr(transformers, "AutoModelForCausalLM"):
-            transformers.AutoModelWithLMHead = transformers.AutoModelForCausalLM
-        else:
-            transformers.AutoModelWithLMHead = transformers.AutoModel
+        transformers.AutoModelWithLMHead = getattr(
+            transformers, "AutoModelForCausalLM", transformers.AutoModel
+        )
 
-    # ── Patch 2: huggingface_hub.hf_hub_download dropped 'use_auth_token' ────
-    # SpeechBrain sends use_auth_token= but newer huggingface_hub expects token=
+    # ── Patch 3: huggingface_hub dropped use_auth_token param ─────────────────
     import huggingface_hub
     if not getattr(huggingface_hub, "_patched_by_ser_engine", False):
         _original = huggingface_hub.hf_hub_download
@@ -37,73 +55,54 @@ def _apply_patches():
                 kwargs["token"] = kwargs.pop("use_auth_token")
             return _original(*args, **kwargs)
 
-        huggingface_hub.hf_hub_download = _patched
-        huggingface_hub._patched_by_ser_engine = True  # idempotency guard
+        huggingface_hub.hf_hub_download        = _patched
+        huggingface_hub._patched_by_ser_engine = True
 
-    # ── Patch 3: replace torchaudio.load with soundfile-based implementation ──
-    # torchaudio v2.9.1 has broken bindings for torchcodec that crash even when
-    # backend='soundfile' is requested. We bypass it entirely.
-    if not getattr(torchaudio, "_patched_by_ser_engine", False):
-        torchaudio.load = _custom_load
-        torchaudio._patched_by_ser_engine = True  # idempotency guard
-
-        # Also add list_audio_backends if missing (some torchaudio builds lack it)
-        if not hasattr(torchaudio, "list_audio_backends"):
-            torchaudio.list_audio_backends = lambda: ["soundfile"]
-
-
-# ── Custom audio loader (soundfile-based) ─────────────────────────────────────
 
 def _custom_load(filepath, **kwargs):
     """
-    Drop-in replacement for torchaudio.load using soundfile.
+    Soundfile-based drop-in replacement for torchaudio.load.
     Returns: (Tensor[channels, time], int sample_rate)
     """
     try:
         data, samplerate = sf.read(filepath)
         data = data.astype(np.float32)
-
         if data.ndim == 1:
-            # Mono: (time,) → (1, time)
             tensor = torch.from_numpy(data).unsqueeze(0)
         else:
-            # Multi-channel: (time, channels) → (channels, time)
             tensor = torch.from_numpy(data.transpose())
-
         return tensor, samplerate
-
     except Exception as e:
-        print(f"CRITICAL: _custom_load failed for {filepath}: {e}")
+        print(f"[SEREngine] CRITICAL: _custom_load failed for {filepath}: {e}")
         raise
 
 
-# ── SER Engine ────────────────────────────────────────────────────────────────
-
 class SEREngine:
+    """
+    Thin wrapper around the SpeechBrain classifier.
+    Gets the model from ModelRegistry — does NOT load it.
+    Loading is done once at startup by registry.load_all().
+    """
+
     def __init__(self):
-        # Apply patches here — not at module level — so importing this file
-        # has zero side effects on other modules.
+        # Patches must still be applied so _custom_load is available
+        # for predict_emotion() even though loading is done by registry
         _apply_patches()
 
-        print("Loading SpeechBrain SER Model (CPU Optimized)...", flush=True)
+        from src.core.model_registry import registry
+        # Gets the already-loaded model — instant, no I/O, no download
+        self.classifier = registry.get("speechbrain")
+        print("[SEREngine] Classifier obtained from registry.")
 
-        import warnings
-        warnings.filterwarnings("ignore", message=".*speechbrain.pretrained.*")
-
-        from speechbrain.inference.interfaces import foreign_class
-
-        self.classifier = foreign_class(
-            source="speechbrain/emotion-recognition-wav2vec2-IEMOCAP",
-            pymodule_file="custom_interface.py",
-            classname="CustomEncoderWav2vec2Classifier",
-            run_opts={"device": "cpu"},
-        )
-        print("SER Model loaded successfully!", flush=True)
-
-    def predict_emotion(self, audio_file):
+    def predict_emotion(self, audio_file: str) -> str:
         """
         Predicts emotion from a WAV file.
-        Returns one of: 'Happy', 'Angry', 'Neutral', 'Sad'
+
+        Args:
+            audio_file: Path to a 16kHz mono WAV file.
+
+        Returns:
+            One of: "Happy", "Angry", "Neutral", "Sad"
         """
         signal, _ = _custom_load(audio_file)
 

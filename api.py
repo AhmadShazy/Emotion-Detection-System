@@ -8,7 +8,7 @@ Run with:
 
 Then open:
     http://localhost:8000          → Frontend UI
-    http://localhost:8000/docs     → Interactive API docs (Swagger)
+    http://localhost:8000/docs     → Swagger API docs
     http://localhost:8000/redoc    → ReDoc API docs
 
 Endpoints registered:
@@ -18,11 +18,12 @@ Endpoints registered:
     POST  /analyze/multimodal/stop       → Stop + analyze recording
     WS    /ws/stream                     → Live multimodal stream
     GET   /                              → Frontend (served from frontend/)
-    GET   /health                        → Health check
+    GET   /health                        → Health check + model status
 """
 
 import sys
 import os
+import asyncio
 
 # Ensure the project root is always on the path regardless of
 # where uvicorn is launched from.
@@ -47,25 +48,31 @@ from routers import text, voice, multimodal, stream
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Runs once on server start — preloads the text emotion model (RoBERTa)
-    so the first /analyze/text request isn't slow.
-    Everything else (Whisper, SER) loads lazily on first use.
+    Runs once on server start.
+
+    ALL models are loaded here via ModelRegistry.load_all() before yield.
+    FastAPI guarantees no request is handled before yield completes.
+    This means every endpoint is guaranteed to have all models ready
+    from the very first request — no lazy loading, no runtime downloads.
+
+    asyncio.to_thread() is used because load_all() is blocking (~17s of
+    CPU/disk work). Running it in a thread pool keeps the event loop free.
     """
     print("\n[STARTUP] Humanoid Assistant API initialising...")
-
-    try:
-        from src.text_emotion.analysis import load_emotion_model
-        load_emotion_model()
-        print("[STARTUP] ✅ Text emotion model (RoBERTa) loaded.")
-    except Exception as e:
-        print(f"[STARTUP] ⚠️  Could not preload text emotion model: {e}")
 
     # Ensure required data directories exist
     for sub in ("data/recordings", "data/processed"):
         os.makedirs(os.path.join(PROJECT_ROOT, sub), exist_ok=True)
 
-    print("[STARTUP] ✅ API ready.\n")
+    # Load ALL models before serving any request.
+    # asyncio.to_thread() runs the blocking load_all() in a thread pool
+    # so the event loop is not blocked during the ~17s startup.
+    from src.core.model_registry import registry
+    await asyncio.to_thread(registry.load_all)
+
+    print("[STARTUP] ✅ API ready — all models loaded.\n")
     yield
+
     # ── Shutdown ──────────────────────────────────────────────────────────────
     print("\n[SHUTDOWN] Humanoid Assistant API shutting down...")
 
@@ -92,8 +99,6 @@ app = FastAPI(
 
 # ════════════════════════════════════════════════════════════════════════════
 # CORS Middleware
-# Allow all localhost origins so the frontend (served on port 8000) and any
-# dev tools (Postman, browser console, etc.) can hit the API freely.
 # ════════════════════════════════════════════════════════════════════════════
 
 app.add_middleware(
@@ -101,7 +106,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "http://localhost:3000",   # in case of a separate dev server
+        "http://localhost:3000",
         "http://127.0.0.1:3000",
     ],
     allow_credentials=True,
@@ -121,25 +126,40 @@ app.include_router(stream.router,     tags=["Live Stream"])
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# Health check  (useful for monitoring / Docker readiness probes)
+# Health check
 # ════════════════════════════════════════════════════════════════════════════
 
 @app.get("/health", tags=["System"], summary="Health Check")
 async def health():
-    """Returns 200 OK with basic server info when the API is running."""
+    """
+    Returns 200 OK with server info and model load status.
+    Check the 'models' field to verify all four models loaded successfully.
+    """
+    from src.core.model_registry import registry
     return JSONResponse({
-        "status": "ok",
+        "status":      "ok",
         "api_version": "2.0.0",
-        "project": "Humanoid Assistant",
+        "project":     "Humanoid Assistant",
+        "models":      registry.status(),
     })
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # Static Frontend
-# Mount LAST — catches everything not matched by the routers above.
-# Serves frontend/index.html at GET /
+# Mount LAST — catches everything not matched by routers above.
+# Logs clearly so 404 issues are immediately visible in the console.
 # ════════════════════════════════════════════════════════════════════════════
 
 _frontend_dir = os.path.join(PROJECT_ROOT, "frontend")
+
 if os.path.isdir(_frontend_dir):
-    app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")
+    print(f"[STARTUP] Mounting frontend from: {_frontend_dir}")
+    app.mount(
+        "/",
+        StaticFiles(directory=_frontend_dir, html=True),
+        name="frontend",
+    )
+else:
+    print(f"[STARTUP] ⚠️  Frontend directory not found at: {_frontend_dir}")
+    print(f"[STARTUP]    PROJECT_ROOT resolved to: {PROJECT_ROOT}")
+    print(f"[STARTUP]    GET / will return 404 until frontend/ exists.")

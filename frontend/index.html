@@ -7,7 +7,8 @@
     <title>Humanoid Assistant V2</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+          rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 
@@ -37,18 +38,24 @@
                 </nav>
 
                 <div class="tab-contents">
+
                     <!-- Text Tab -->
                     <div id="tab-text" class="tab-pane active">
                         <h2>Text Emotion Analysis</h2>
                         <p class="subtitle">Analyze text using the RoBERTa model.</p>
-                        <textarea id="text-input" placeholder="Type your message here..."></textarea>
-                        <button id="btn-analyze-text" class="primary-btn">Analyze Text</button>
+                        <textarea id="text-input"
+                                  placeholder="Type your message here..."></textarea>
+                        <button id="btn-analyze-text" class="primary-btn">
+                            Analyze Text
+                        </button>
                     </div>
 
                     <!-- Voice Tab -->
                     <div id="tab-voice" class="tab-pane">
                         <h2>Voice Emotion Analysis</h2>
-                        <p class="subtitle">Upload a .wav file or record your voice directly.</p>
+                        <p class="subtitle">
+                            Upload a .wav file or record your voice directly.
+                        </p>
 
                         <div class="voice-controls">
                             <div class="record-section">
@@ -61,13 +68,20 @@
                             <div class="divider">OR</div>
 
                             <div class="upload-section">
-                                <input type="file" id="voice-file" accept=".wav" class="file-input">
-                                <label for="voice-file" class="file-label">Choose .wav File</label>
-                                <span id="file-name" class="status-text">No file chosen</span>
+                                <input type="file" id="voice-file"
+                                       accept=".wav" class="file-input">
+                                <label for="voice-file" class="file-label">
+                                    Choose .wav File
+                                </label>
+                                <span id="file-name" class="status-text">
+                                    No file chosen
+                                </span>
                             </div>
                         </div>
 
-                        <button id="btn-analyze-voice" class="primary-btn" disabled>Analyze Voice</button>
+                        <button id="btn-analyze-voice" class="primary-btn" disabled>
+                            Analyze Voice
+                        </button>
                     </div>
 
                     <!-- Multimodal Tab -->
@@ -75,18 +89,26 @@
                         <h2>Multimodal Recording</h2>
                         <div class="info-banner">
                             <span class="banner-icon">ℹ️</span>
-                            <p>This will start recording using the <strong>server's</strong> camera and microphone.
-                                Ensure they are connected.</p>
+                            <p>
+                                This will start recording using the
+                                <strong>server's</strong> camera and microphone.
+                                Ensure they are connected.
+                            </p>
                         </div>
                         <p class="subtitle">Maximum duration: 30 seconds.</p>
 
                         <div class="multimodal-controls">
-                            <button id="btn-start-multimodal" class="primary-btn">Start Recording</button>
-                            <button id="btn-stop-multimodal" class="danger-btn" style="display: none;">Stop
-                                Recording</button>
+                            <button id="btn-start-multimodal" class="primary-btn">
+                                Start Recording
+                            </button>
+                            <button id="btn-stop-multimodal" class="danger-btn"
+                                    style="display: none;">
+                                Stop Recording
+                            </button>
                         </div>
 
-                        <div class="recording-timer" id="multimodal-timer" style="display: none;">
+                        <div class="recording-timer" id="multimodal-timer"
+                             style="display: none;">
                             <span class="pulse-dot"></span>
                             <span id="timer-display">00:00</span> / 00:30
                         </div>
@@ -95,30 +117,40 @@
                     <!-- Stream Tab -->
                     <div id="tab-stream" class="tab-pane">
                         <h2>Live Multimodal Stream</h2>
-                        <p class="subtitle">Real-time analysis using server's camera and mic.</p>
+                        <p class="subtitle">
+                            Real-time analysis using server's camera and mic.
+                        </p>
 
                         <div class="stream-controls">
-                            <button id="btn-connect-stream" class="primary-btn">Connect Stream</button>
+                            <button id="btn-connect-stream" class="primary-btn">
+                                Connect Stream
+                            </button>
                             <button id="btn-disconnect-stream" class="danger-btn"
-                                style="display: none;">Disconnect</button>
+                                    style="display: none;">
+                                Disconnect
+                            </button>
                         </div>
 
-                        <div id="stream-status-container" class="status-container" style="display: none;">
+                        <div id="stream-status-container" class="status-container"
+                             style="display: none;">
                             <span class="pulse-dot"></span>
                             <span id="stream-status-text">Connecting...</span>
                         </div>
                     </div>
+
                 </div>
 
                 <!-- Loading Spinner -->
-                <div id="loading-overlay" class="loading-overlay" style="display: none;">
+                <div id="loading-overlay" class="loading-overlay"
+                     style="display: none;">
                     <div class="spinner"></div>
                     <p>Analyzing...</p>
                 </div>
             </section>
 
             <!-- Results Section -->
-            <section id="results-panel" class="results-panel glass-card" style="display: none;">
+            <section id="results-panel" class="results-panel glass-card"
+                     style="display: none;">
                 <h2>Analysis Results</h2>
                 <div class="results-header">
                     <div class="user-input-display">
@@ -133,8 +165,12 @@
                     <div class="result-card dominant-emotion">
                         <h3>Dominant Emotion</h3>
                         <div class="emotion-display">
-                            <span id="res-dominant-emo" class="emotion-name">Neutral</span>
-                            <span id="res-dominant-conf" class="emotion-conf">0%</span>
+                            <span id="res-dominant-emo" class="emotion-name">
+                                Neutral
+                            </span>
+                            <span id="res-dominant-conf" class="emotion-conf">
+                                0%
+                            </span>
                         </div>
                     </div>
 

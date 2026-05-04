@@ -10,6 +10,8 @@ external/whisper/
 external/ser_project/
 external/openface/
 wav2vec2_checkpoints/
+external/speechbrain/
+external/faster_whisper/
 
 # IDE & Editor
 .vscode/
