@@ -85,16 +85,22 @@ class SEREngine:
     """
 
     def __init__(self):
-        # Patches must still be applied so _custom_load is available
-        # for predict_emotion() even though loading is done by registry
-        _apply_patches()
+        # Prefer the registry's canonical patch set (already applied at startup).
+        # Fall back to the local _apply_patches() only when used standalone via CLI
+        # (i.e., when registry is not initialised yet).
+        try:
+            from src.core.model_registry import registry
+            registry._apply_speechbrain_patches()
+            self.classifier = registry.get("speechbrain")
+        except Exception:
+            # CLI / test context — apply patches locally and re-raise if still broken
+            _apply_patches()
+            from src.core.model_registry import registry
+            self.classifier = registry.get("speechbrain")
 
-        from src.core.model_registry import registry
-        # Gets the already-loaded model — instant, no I/O, no download
-        self.classifier = registry.get("speechbrain")
         print("[SEREngine] Classifier obtained from registry.")
 
-    def predict_emotion(self, audio_file: str) -> str:
+    def predict_emotion(self, audio_file: str) -> tuple:
         """
         Predicts emotion from a WAV file.
 
@@ -102,11 +108,14 @@ class SEREngine:
             audio_file: Path to a 16kHz mono WAV file.
 
         Returns:
-            One of: "Happy", "Angry", "Neutral", "Sad"
+            tuple: (label: str, confidence: float)
+                label      — one of "Happy", "Angry", "Neutral", "Sad"
+                confidence — real softmax probability from SpeechBrain [0.0, 1.0]
         """
         signal, _ = _custom_load(audio_file)
 
         # classify_batch expects shape (Batch, Time)
+        # Returns: out_prob (log-probs), score (top-class prob), index, text_lab
         out_prob, score, index, text_lab = self.classifier.classify_batch(signal)
 
         label_map = {
@@ -115,15 +124,19 @@ class SEREngine:
             "neu": "Neutral",
             "sad": "Sad",
         }
-        return label_map.get(text_lab[0], text_lab[0])
+        label      = label_map.get(text_lab[0], text_lab[0])
+        confidence = float(score[0])   # real softmax probability, not hardcoded
+
+        print(f"[SEREngine] Prediction: {label} (conf={confidence:.3f})")
+        return label, confidence
 
 
 # ── CLI test ──────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     if os.path.exists("input.wav"):
-        engine  = SEREngine()
-        emotion = engine.predict_emotion("input.wav")
-        print(f"Predicted Emotion: {emotion}")
+        engine           = SEREngine()
+        emotion, conf    = engine.predict_emotion("input.wav")
+        print(f"Predicted Emotion: {emotion} (confidence: {conf:.3f})")
     else:
         print("No input.wav found. Place a WAV file named input.wav and re-run.")

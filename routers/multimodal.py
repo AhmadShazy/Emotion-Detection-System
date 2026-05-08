@@ -104,42 +104,55 @@ async def start_multimodal(request: MultimodalStartRequest = None):
     audio_thread = threading.Thread(target=_audio_worker, daemon=True)
     audio_thread.start()
 
-    # ── Store session ─────────────────────────────────────────────────────────
+    # ── Store session ─────────────────────────────────────────────────────
     session = {
-        "stop_event":     stop_event,
-        "audio_thread":   audio_thread,
-        "of_process":     of_process,
-        "wav_path":       wav_path,
-        "csv_path":       csv_path,
-        "face_available": face_available,
-        "audio_chunks":   audio_chunks,
-        "start_time":     time.time(),
-        "processed":      False,   # guard: ensures we process exactly once
+        # MM1 fix: store session_id so _process_and_close_session() can pass
+        # it to unified_pipeline for conversation history continuity.
+        "session_id":       session_id,
+        # MM3 fix: per-session lock makes ownership-claim atomic between the
+        # HTTP /stop handler and the auto-stop daemon thread.
+        "processing_lock":  threading.Lock(),
+        "stop_event":       stop_event,
+        "audio_thread":     audio_thread,
+        "of_process":       of_process,
+        "wav_path":         wav_path,
+        "csv_path":         csv_path,
+        "face_available":   face_available,
+        "audio_chunks":     audio_chunks,
+        "start_time":       time.time(),
+        "processed":        False,   # guard: ensures we process exactly once
     }
     with _sessions_lock:
         _sessions[session_id] = session
 
-    # ── Auto-stop timer (hard 30-second cap) ──────────────────────────────────
-    # Bug 2 fix: auto-stop now calls _process_and_close_session() so the
-    # session is fully analysed and removed even if the client never calls /stop.
+    # ── Auto-stop timer (hard 30-second cap) ───────────────────────────────────
     def _auto_stop():
         time.sleep(MAX_DURATION_SECONDS)
 
         with _sessions_lock:
             sess = _sessions.get(session_id)
-            if sess is None or sess.get("processed"):
-                return  # already handled by /stop — nothing to do
-            sess["processed"] = True       # claim ownership before releasing lock
+            if sess is None:
+                return   # /stop already handled and removed it
 
-        # Process in background thread (blocking ML work)
+        # Try to acquire the processing lock — non-blocking.
+        # If /stop already owns it, this thread yields gracefully.
+        acquired = sess["processing_lock"].acquire(blocking=False)
+        if not acquired:
+            print(f"[Multimodal] Auto-stop: /stop already owns session {session_id}")
+            return
+
         try:
+            # Mark as processed while holding the lock, then remove from store
+            sess["processed"] = True
+            with _sessions_lock:
+                _sessions.pop(session_id, None)
+
+            print(f"[Multimodal] Auto-stop: processing session {session_id}")
             _process_and_close_session(sess)
         except Exception as e:
             print(f"[Multimodal] Auto-stop processing error for {session_id}: {e}")
         finally:
-            # Remove from store regardless of success
-            with _sessions_lock:
-                _sessions.pop(session_id, None)
+            sess["processing_lock"].release()
 
     threading.Thread(target=_auto_stop, daemon=True).start()
 
@@ -165,6 +178,7 @@ async def start_multimodal(request: MultimodalStartRequest = None):
     summary="Stop Multimodal Recording & Analyze",
 )
 async def stop_multimodal(request: MultimodalStopRequest):
+    # ── Locate session under lock ─────────────────────────────────────────────
     with _sessions_lock:
         session = _sessions.get(request.session_id)
 
@@ -177,29 +191,38 @@ async def stop_multimodal(request: MultimodalStopRequest):
                 ),
             )
 
-        if session.get("processed"):
-            # Auto-stop already claimed this session — race condition guard
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Session '{request.session_id}' was already auto-stopped "
-                    "after the 30-second cap. Results were processed server-side."
-                ),
-            )
-
-        # Claim ownership so auto-stop thread won't double-process
-        session["processed"] = True
-        # Remove from store now — /stop owns cleanup from here
-        del _sessions[request.session_id]
+    # ── Atomically claim ownership via per-session lock (MM3 fix) ──────────────
+    # acquire(blocking=False) returns immediately:
+    #   True  — we own it, safe to proceed
+    #   False — auto-stop thread already owns it (rare race at exactly 30s)
+    acquired = session["processing_lock"].acquire(blocking=False)
+    if not acquired:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Session '{request.session_id}' is currently being processed "
+                "by the auto-stop timer. Results were processed server-side."
+            ),
+        )
 
     try:
+        # Mark as processed and remove from store before releasing the lock
+        session["processed"] = True
+        with _sessions_lock:
+            _sessions.pop(request.session_id, None)
+
+        print(f"[Multimodal] /stop: processing session {request.session_id}")
         payload = await asyncio.to_thread(_process_and_close_session, session)
         return payload
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail=f"Multimodal processing error: {str(exc)}",
         ) from exc
+    finally:
+        session["processing_lock"].release()
 
 
 # ════════════════════════════════════════════════════════════════════════════

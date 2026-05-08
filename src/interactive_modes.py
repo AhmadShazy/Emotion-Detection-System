@@ -142,15 +142,18 @@ def process_voice_pipeline(wav_path: str):
 
     Returns:
         tuple: (text_state, voice_state, stt_result, ser_result)
+               voice_state["confidence"] is the real SpeechBrain softmax score.
     """
     if not SEREngine or not wav_path or not os.path.exists(wav_path):
         return None, None, "N/A", "N/A"
 
     # ── Step 1: SER ───────────────────────────────────────────────────────────
-    ser_result = "N/A"
+    ser_result     = "N/A"
+    ser_confidence = 0.0   # safe default — overwritten on success
     try:
-        engine     = SEREngine()
-        ser_result = engine.predict_emotion(wav_path)
+        engine                  = SEREngine()
+        ser_result, ser_confidence = engine.predict_emotion(wav_path)
+        print(f"[VoicePipeline] SER: {ser_result} (conf={ser_confidence:.3f})")
     except Exception as e:
         print(f"[VoicePipeline] SER failed: {e}")
 
@@ -187,16 +190,22 @@ def process_voice_pipeline(wav_path: str):
             print(f"[VoicePipeline] Text emotion failed: {e}")
 
     # ── Voice State ───────────────────────────────────────────────────────────
+    # Reliability: derived from real confidence — low confidence = less reliable.
+    # Capped at 1.0. A small boost (+0.15) is applied because SpeechBrain's
+    # top-class softmax scores often sit around 0.6–0.8 on clean speech.
     voice_state = None
     if ser_result and ser_result != "N/A":
+        reliability = min(1.0, ser_confidence + 0.15)
         voice_state = {
             "source":          "voice",
             "emotion":         ser_result,
-            "confidence":      0.8,
+            "confidence":      round(ser_confidence, 4),
             "average_emotion": ser_result,
             "peak_emotion":    ser_result,
-            "reliability":     1.0,
+            "reliability":     round(reliability, 4),
         }
+        print(f"[VoicePipeline] voice_state → emotion={ser_result}, "
+              f"conf={ser_confidence:.3f}, reliability={reliability:.3f}")
 
     return text_state, voice_state, stt_result, ser_result
 

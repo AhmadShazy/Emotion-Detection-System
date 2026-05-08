@@ -19,23 +19,43 @@ def classify_emotion(row):
     """
     Classifies a single OpenFace frame row into an emotion
     based on Action Unit (AU) presence flags.
+
+    Rule ordering matters — each check must be mutually exclusive:
+        Happy     → AU12_c (lip corner puller) OR AU06_c (cheek raiser)
+        Surprised → AU26_c (jaw drop) OR (AU01_c AND AU02_c — both brows raised)
+        Angry     → AU04_c AND AU07_c (brow lower + lid tighten, both required)
+        Sad       → AU01_c AND AU15_c (inner brow raise + lip corner depressor)
+                    OR AU15_c alone (lip depressor is a reliable sad marker)
+        Neutral   → fallback
+
+    Bug MM2 fix:
+        Previously AU01_c (inner brow raise) triggered BOTH the Sad and
+        Surprised rules. Since Sad came first, Surprised was unreachable via
+        AU01_c. Fixed by:
+          1. Requiring AU26_c (jaw drop) OR the AU01+AU02 combination for Surprised.
+          2. Requiring BOTH AU01_c AND AU15_c for Sad (not AU01 alone).
+          3. AU15_c alone as a reliable fallback for Sad.
     """
     # Happy — lip corner puller OR cheek raiser
     if row["AU12_c"] == 1 or row["AU06_c"] == 1:
         return "Happy"
 
-    # Angry — brow lowerer AND lid tightener
-    # (requiring both avoids false positives during speech)
+    # Surprised — jaw drop (most reliable) OR both brows simultaneously raised
+    # AU26_c alone is sufficient; AU01+AU02 together indicate full brow raise
+    if row["AU26_c"] == 1 or (row["AU01_c"] == 1 and row["AU02_c"] == 1):
+        return "Surprised"
+
+    # Angry — brow lowerer AND lid tightener (both required to avoid false positives)
     if row["AU04_c"] == 1 and row["AU07_c"] == 1:
         return "Angry"
 
-    # Sad — inner brow raiser OR lip corner depressor
-    if row["AU01_c"] == 1 or row["AU15_c"] == 1:
+    # Sad — inner brow raise AND lip corner depressor together
+    if row["AU01_c"] == 1 and row["AU15_c"] == 1:
         return "Sad"
 
-    # Surprised — inner brow raiser OR outer brow raiser OR jaw drop
-    if row["AU01_c"] == 1 or row["AU02_c"] == 1 or row["AU26_c"] == 1:
-        return "Surprised"
+    # Sad fallback — lip corner depressor alone is a reliable sad indicator
+    if row["AU15_c"] == 1:
+        return "Sad"
 
     return "Neutral"
 

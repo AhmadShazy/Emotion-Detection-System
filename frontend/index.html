@@ -26,7 +26,6 @@
 
     <div class="main-wrapper">
         <main class="content-column">
-            <!-- Toast Notifications -->
             <div id="toast-container" class="toast-container"></div>
 
             <section class="analysis-panel glass-card">
@@ -39,7 +38,7 @@
 
                 <div class="tab-contents">
 
-                    <!-- Text Tab -->
+                    <!-- ════════════════════ TEXT ════════════════════ -->
                     <div id="tab-text" class="tab-pane active">
                         <h2>Text Emotion Analysis</h2>
                         <p class="subtitle">Analyze text using the RoBERTa model.</p>
@@ -50,11 +49,12 @@
                         </button>
                     </div>
 
-                    <!-- Voice Tab -->
+                    <!-- ════════════════════ VOICE ═══════════════════ -->
                     <div id="tab-voice" class="tab-pane">
                         <h2>Voice Emotion Analysis</h2>
                         <p class="subtitle">
-                            Upload a .wav file or record your voice directly.
+                            Record your voice or upload a .wav file.
+                            Speak for at least 2–3 seconds for best results.
                         </p>
 
                         <div class="voice-controls">
@@ -64,6 +64,9 @@
                                 </button>
                                 <span id="record-status" class="status-text">Ready</span>
                             </div>
+
+                            <!-- Live waveform visualizer (bars populated by JS) -->
+                            <div id="voice-waveform" class="voice-waveform"></div>
 
                             <div class="divider">OR</div>
 
@@ -84,55 +87,84 @@
                         </button>
                     </div>
 
-                    <!-- Multimodal Tab -->
+                    <!-- ════════════════════ MULTIMODAL ══════════════ -->
                     <div id="tab-multimodal" class="tab-pane">
                         <h2>Multimodal Recording</h2>
+
                         <div class="info-banner">
                             <span class="banner-icon">ℹ️</span>
                             <p>
-                                This will start recording using the
-                                <strong>server's</strong> camera and microphone.
-                                Ensure they are connected.
+                                The <strong>server</strong> records your camera and
+                                microphone via OpenFace. Your browser shows a live
+                                preview below so you can see yourself.
+                                Maximum 30 seconds.
                             </p>
                         </div>
-                        <p class="subtitle">Maximum duration: 30 seconds.</p>
+
+                        <!-- Browser camera preview (user feedback only) -->
+                        <div class="camera-preview-wrapper">
+                            <video id="camera-preview"
+                                   class="camera-preview"
+                                   autoplay muted playsinline
+                                   style="display:none;">
+                            </video>
+                            <div class="camera-placeholder" id="camera-placeholder">
+                                <span class="camera-icon">📷</span>
+                                <p>Camera preview will appear here during recording</p>
+                            </div>
+                        </div>
+
+                        <p id="multimodal-status" class="status-text"
+                           style="margin:0.5rem 0;">Ready</p>
 
                         <div class="multimodal-controls">
                             <button id="btn-start-multimodal" class="primary-btn">
                                 Start Recording
                             </button>
                             <button id="btn-stop-multimodal" class="danger-btn"
-                                    style="display: none;">
+                                    style="display:none;">
                                 Stop Recording
                             </button>
                         </div>
 
                         <div class="recording-timer" id="multimodal-timer"
-                             style="display: none;">
+                             style="display:none;">
                             <span class="pulse-dot"></span>
                             <span id="timer-display">00:00</span> / 00:30
                         </div>
                     </div>
 
-                    <!-- Stream Tab -->
+                    <!-- ════════════════════ STREAM ══════════════════ -->
                     <div id="tab-stream" class="tab-pane">
                         <h2>Live Multimodal Stream</h2>
                         <p class="subtitle">
-                            Real-time analysis using server's camera and mic.
+                            Real-time analysis — server listens via mic and camera.
+                            Speak naturally; results appear after each sentence.
                         </p>
+
+                        <!-- Mic level indicator -->
+                        <div class="mic-level-wrapper" id="mic-level-wrapper"
+                             style="display:none;">
+                            <span class="mic-icon">🎙️</span>
+                            <div class="mic-level-bar-bg">
+                                <div id="stream-mic-level"
+                                     class="mic-level-bar"></div>
+                            </div>
+                            <span class="mic-label">Mic level</span>
+                        </div>
 
                         <div class="stream-controls">
                             <button id="btn-connect-stream" class="primary-btn">
                                 Connect Stream
                             </button>
                             <button id="btn-disconnect-stream" class="danger-btn"
-                                    style="display: none;">
+                                    style="display:none;">
                                 Disconnect
                             </button>
                         </div>
 
-                        <div id="stream-status-container" class="status-container"
-                             style="display: none;">
+                        <div id="stream-status-container"
+                             class="status-container" style="display:none;">
                             <span class="pulse-dot"></span>
                             <span id="stream-status-text">Connecting...</span>
                         </div>
@@ -142,15 +174,15 @@
 
                 <!-- Loading Spinner -->
                 <div id="loading-overlay" class="loading-overlay"
-                     style="display: none;">
+                     style="display:none;">
                     <div class="spinner"></div>
                     <p>Analyzing...</p>
                 </div>
             </section>
 
-            <!-- Results Section -->
+            <!-- Results -->
             <section id="results-panel" class="results-panel glass-card"
-                     style="display: none;">
+                     style="display:none;">
                 <h2>Analysis Results</h2>
                 <div class="results-header">
                     <div class="user-input-display">
@@ -161,20 +193,13 @@
                 </div>
 
                 <div class="results-grid">
-                    <!-- Dominant Emotion Card -->
                     <div class="result-card dominant-emotion">
                         <h3>Dominant Emotion</h3>
                         <div class="emotion-display">
-                            <span id="res-dominant-emo" class="emotion-name">
-                                Neutral
-                            </span>
-                            <span id="res-dominant-conf" class="emotion-conf">
-                                0%
-                            </span>
+                            <span id="res-dominant-emo" class="emotion-name">Neutral</span>
+                            <span id="res-dominant-conf" class="emotion-conf">0%</span>
                         </div>
                     </div>
-
-                    <!-- Tone Analysis Card -->
                     <div class="result-card tone-analysis">
                         <h3>Tone Analysis</h3>
                         <div class="tone-display">
@@ -184,17 +209,14 @@
                     </div>
                 </div>
 
-                <!-- Emotion Probabilities -->
                 <div class="probabilities-section">
                     <h3>Emotion Probabilities</h3>
-                    <div id="prob-bars" class="prob-bars-container">
-                        <!-- Bars injected via JS -->
-                    </div>
+                    <div id="prob-bars" class="prob-bars-container"></div>
                 </div>
             </section>
         </main>
 
-        <aside id="json-panel" class="json-panel glass-card" style="display: none;">
+        <aside id="json-panel" class="json-panel glass-card" style="display:none;">
             <h2>Raw JSON Output</h2>
             <div class="json-container">
                 <pre><code id="json-output"></code></pre>
@@ -204,5 +226,4 @@
 
     <script src="app.js"></script>
 </body>
-
 </html>

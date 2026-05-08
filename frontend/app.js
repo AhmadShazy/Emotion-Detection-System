@@ -1,8 +1,13 @@
 // ============================================================================
 // State & Elements
 // ============================================================================
-const API_BASE = 'http://localhost:8000';
-let currentTab = 'text';
+// Derive API base from current browser location so the app works on any
+// host / port without code changes (localhost, LAN IP, production domain).
+// Since FastAPI serves this file from the same origin, window.location always
+// points at the correct API server.
+const API_BASE = `${window.location.protocol}//${window.location.host}`;
+let currentTab       = 'text';
+let currentSessionId = null;   // LS3: track latest session_id across all tabs
 
 // Theme
 const themeToggle = document.getElementById('theme-toggle');
@@ -13,34 +18,40 @@ const tabBtns = document.querySelectorAll('.tab-btn');
 const tabPanes = document.querySelectorAll('.tab-pane');
 
 // Overlay & Results
-const loadingOverlay = document.getElementById('loading-overlay');
-const resultsPanel = document.getElementById('results-panel');
-const toastContainer = document.getElementById('toast-container');
-const jsonPanel = document.getElementById('json-panel');
-const jsonOutput = document.getElementById('json-output');
+const loadingOverlay  = document.getElementById('loading-overlay');
+const resultsPanel    = document.getElementById('results-panel');
+const toastContainer  = document.getElementById('toast-container');
+const jsonPanel       = document.getElementById('json-panel');
+const jsonOutput      = document.getElementById('json-output');
 
 // Text
-const textInput = document.getElementById('text-input');
+const textInput      = document.getElementById('text-input');
 const btnAnalyzeText = document.getElementById('btn-analyze-text');
 
 // Voice
-const btnRecordVoice = document.getElementById('btn-record-voice');
-const recordStatus = document.getElementById('record-status');
-const voiceFile = document.getElementById('voice-file');
+const btnRecordVoice  = document.getElementById('btn-record-voice');
+const recordStatus    = document.getElementById('record-status');
+const voiceFile       = document.getElementById('voice-file');
 const fileNameDisplay = document.getElementById('file-name');
 const btnAnalyzeVoice = document.getElementById('btn-analyze-voice');
+const voiceWaveform   = document.getElementById('voice-waveform');
 
 // Multimodal
 const btnStartMultimodal = document.getElementById('btn-start-multimodal');
-const btnStopMultimodal = document.getElementById('btn-stop-multimodal');
-const multimodalTimer = document.getElementById('multimodal-timer');
-const timerDisplay = document.getElementById('timer-display');
+const btnStopMultimodal  = document.getElementById('btn-stop-multimodal');
+const multimodalTimer    = document.getElementById('multimodal-timer');
+const timerDisplay       = document.getElementById('timer-display');
+const cameraPreview      = document.getElementById('camera-preview');
+const cameraPlaceholder  = document.getElementById('camera-placeholder');
+const multimodalStatus   = document.getElementById('multimodal-status');
 
 // Stream
-const btnConnectStream = document.getElementById('btn-connect-stream');
-const btnDisconnectStream = document.getElementById('btn-disconnect-stream');
+const btnConnectStream      = document.getElementById('btn-connect-stream');
+const btnDisconnectStream   = document.getElementById('btn-disconnect-stream');
 const streamStatusContainer = document.getElementById('stream-status-container');
-const streamStatusText = document.getElementById('stream-status-text');
+const streamStatusText      = document.getElementById('stream-status-text');
+const streamMicLevel        = document.getElementById('stream-mic-level');
+const micLevelWrapper       = document.getElementById('mic-level-wrapper');
 
 // ============================================================================
 // Theme Management
@@ -52,7 +63,7 @@ function initTheme() {
 
 themeToggle.addEventListener('click', () => {
     const current = htmlEl.getAttribute('data-theme');
-    const next = current === 'dark' ? 'light' : 'dark';
+    const next    = current === 'dark' ? 'light' : 'dark';
     htmlEl.setAttribute('data-theme', next);
     localStorage.setItem('theme', next);
 });
@@ -62,18 +73,19 @@ themeToggle.addEventListener('click', () => {
 // ============================================================================
 tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
-        // Reset states if leaving active session
+        // Cleanup any active sessions / streams when switching tabs
         if (ws) disconnectWebSocket();
         if (multimodalSessionId) stopMultimodalSession();
+        stopCameraPreview();
+        stopVoiceVisualization();
+        stopStreamMicMonitor();
 
-        // UI update
         tabBtns.forEach(b => b.classList.remove('active'));
         tabPanes.forEach(p => p.classList.remove('active'));
         btn.classList.add('active');
         currentTab = btn.getAttribute('data-tab');
         document.getElementById(`tab-${currentTab}`).classList.add('active');
 
-        // Hide results when switching tabs
         resultsPanel.style.display = 'none';
         if (jsonPanel) jsonPanel.style.display = 'none';
     });
@@ -82,13 +94,15 @@ tabBtns.forEach(btn => {
 // ============================================================================
 // UI Helpers
 // ============================================================================
-function showLoading(show) {
+function showLoading(show, message = 'Analyzing...') {
     loadingOverlay.style.display = show ? 'flex' : 'none';
+    const txt = loadingOverlay.querySelector('p');
+    if (txt) txt.textContent = message;
 }
 
-function showToast(message) {
+function showToast(message, type = 'error') {
     const toast = document.createElement('div');
-    toast.className = 'toast';
+    toast.className = `toast toast-${type}`;
     toast.textContent = message;
     toastContainer.appendChild(toast);
     setTimeout(() => {
@@ -99,40 +113,49 @@ function showToast(message) {
 
 function getEmotionColor(emotion) {
     const colors = {
-        happy: 'var(--emo-happy)',
-        joy: 'var(--emo-joy)',
-        sad: 'var(--emo-sad)',
-        angry: 'var(--emo-angry)',
-        fear: 'var(--emo-fear)',
-        surprised: 'var(--emo-surprised)',
-        neutral: 'var(--emo-neutral)',
-        disgust: 'var(--emo-disgust)',
-        anxiety: 'var(--emo-anxiety)',
+        happy:       'var(--emo-happy)',
+        joy:         'var(--emo-joy)',
+        sad:         'var(--emo-sad)',
+        angry:       'var(--emo-angry)',
+        fear:        'var(--emo-fear)',
+        surprised:   'var(--emo-surprised)',
+        neutral:     'var(--emo-neutral)',
+        disgust:     'var(--emo-disgust)',
+        anxiety:     'var(--emo-anxiety)',
+        frustration: 'var(--emo-angry)',
+        guilt:       'var(--emo-sad)',
+        shame:       'var(--emo-sad)',
+        calm:        'var(--emo-neutral)',
+        concerned:   'var(--emo-fear)',
+        empathetic:  'var(--emo-happy)',
     };
-    return colors[emotion.toLowerCase()] || 'var(--primary-color)';
+    return colors[(emotion || '').toLowerCase()] || 'var(--primary-color)';
 }
 
 function renderResults(payload) {
     if (!payload) return;
 
-    // Unpack payload
+    // LS3: track session_id so streaming can inherit conversation history
+    if (payload.session_id) currentSessionId = payload.session_id;
+
     const { user_input, emotion_analysis, tone_analysis } = payload;
 
-    // Header
-    document.getElementById('res-text').textContent = user_input.text || "(No text)";
-    document.getElementById('res-time').textContent = new Date(user_input.timestamp).toLocaleString();
+    document.getElementById('res-text').textContent =
+        user_input.text || "(No transcription)";
+    document.getElementById('res-time').textContent =
+        new Date(user_input.timestamp).toLocaleString();
 
-    // Dominant Emotion
     const emoName = document.getElementById('res-dominant-emo');
-    emoName.textContent = emotion_analysis.dominant_emotion;
-    emoName.style.color = getEmotionColor(emotion_analysis.dominant_emotion);
-    document.getElementById('res-dominant-conf').textContent = `${Math.round(emotion_analysis.confidence * 100)}%`;
+    emoName.textContent  = emotion_analysis.dominant_emotion;
+    emoName.style.color  = getEmotionColor(emotion_analysis.dominant_emotion);
+    document.getElementById('res-dominant-conf').textContent =
+        `${Math.round(emotion_analysis.confidence * 100)}%`;
 
-    // Tone
-    document.getElementById('res-tone').textContent = tone_analysis.tone;
-    document.getElementById('res-tone-conf').textContent = `${Math.round(tone_analysis.confidence * 100)}%`;
+    document.getElementById('res-tone').textContent =
+        tone_analysis.tone;
+    document.getElementById('res-tone-conf').textContent =
+        `${Math.round(tone_analysis.confidence * 100)}%`;
 
-    // Probabilities
     const probContainer = document.getElementById('prob-bars');
     probContainer.innerHTML = '';
 
@@ -147,7 +170,9 @@ function renderResults(payload) {
         row.innerHTML = `
             <div class="prob-label">${emo}</div>
             <div class="prob-bar-wrapper">
-                <div class="prob-bar" style="width: ${pct}%; background-color: ${getEmotionColor(emo)}"></div>
+                <div class="prob-bar"
+                     style="width:${pct}%;background-color:${getEmotionColor(emo)}">
+                </div>
             </div>
             <div class="prob-value">${pct}%</div>
         `;
@@ -156,78 +181,83 @@ function renderResults(payload) {
 
     resultsPanel.style.display = 'block';
 
-    // Set JSON output
     if (jsonPanel && jsonOutput) {
         jsonOutput.textContent = JSON.stringify(payload, null, 2);
         jsonPanel.style.display = 'flex';
     }
 
-    // Scroll to results if not streaming
     if (currentTab !== 'stream') {
         resultsPanel.scrollIntoView({ behavior: 'smooth' });
     }
 }
 
 // ============================================================================
-// Bug 3 Fix — WAV Encoder
+// WAV Encoder
 // ============================================================================
-// Browser MediaRecorder cannot produce real PCM WAV — it always outputs WebM
-// or Ogg regardless of the MIME type set on the Blob. Passing WebM bytes to
-// soundfile on the server causes a hard crash in the voice pipeline.
-//
-// Fix: encode the raw PCM samples captured via AudioContext + ScriptProcessor
-// directly into a proper WAV file (44-byte RIFF header + 16-bit PCM samples)
-// entirely in the browser, with no external libraries needed.
-
-/**
- * Encodes a Float32Array of PCM samples into a WAV Blob (16-bit mono PCM).
- * @param {Float32Array} samples  - Raw audio samples in range [-1.0, 1.0]
- * @param {number}       sampleRate - e.g. 16000 or 44100
- * @returns {Blob} - A proper audio/wav Blob that soundfile can parse
- */
 function encodeWAV(samples, sampleRate) {
-    const numChannels = 1;
+    const numChannels  = 1;
     const bitsPerSample = 16;
-    const byteRate = sampleRate * numChannels * bitsPerSample / 8;
-    const blockAlign = numChannels * bitsPerSample / 8;
-    const dataLength = samples.length * 2; // 2 bytes per 16-bit sample
-    const buffer = new ArrayBuffer(44 + dataLength);
-    const view = new DataView(buffer);
+    const byteRate     = sampleRate * numChannels * bitsPerSample / 8;
+    const blockAlign   = numChannels * bitsPerSample / 8;
+    const dataLength   = samples.length * 2;
+    const buffer       = new ArrayBuffer(44 + dataLength);
+    const view         = new DataView(buffer);
 
-    // ── RIFF header ──────────────────────────────────────────────────────────
-    const writeStr = (offset, str) => {
-        for (let i = 0; i < str.length; i++) {
-            view.setUint8(offset + i, str.charCodeAt(i));
-        }
+    const writeStr = (off, str) => {
+        for (let i = 0; i < str.length; i++)
+            view.setUint8(off + i, str.charCodeAt(i));
     };
 
-    writeStr(0, 'RIFF');
-    view.setUint32(4, 36 + dataLength, true);       // file size - 8
-    writeStr(8, 'WAVE');
-
-    // ── fmt chunk ─────────────────────────────────────────────────────────────
+    writeStr(0,  'RIFF');
+    view.setUint32(4,  36 + dataLength, true);
+    writeStr(8,  'WAVE');
     writeStr(12, 'fmt ');
-    view.setUint32(16, 16, true);                   // chunk size
-    view.setUint16(20, 1, true);                    // PCM format
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, byteRate, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, bitsPerSample, true);
-
-    // ── data chunk ────────────────────────────────────────────────────────────
+    view.setUint32(16, 16,            true);
+    view.setUint16(20,  1,            true);
+    view.setUint16(22,  numChannels,  true);
+    view.setUint32(24,  sampleRate,   true);
+    view.setUint32(28,  byteRate,     true);
+    view.setUint16(32,  blockAlign,   true);
+    view.setUint16(34,  bitsPerSample,true);
     writeStr(36, 'data');
     view.setUint32(40, dataLength, true);
 
-    // Convert Float32 [-1, 1] → Int16 [-32768, 32767]
     let offset = 44;
     for (let i = 0; i < samples.length; i++) {
         const s = Math.max(-1, Math.min(1, samples[i]));
         view.setInt16(offset, s < 0 ? s * 32768 : s * 32767, true);
         offset += 2;
     }
-
     return new Blob([buffer], { type: 'audio/wav' });
+}
+
+// ============================================================================
+// Mic Level Monitor — shared utility
+// Creates an AnalyserNode on a stream and calls onLevel(0-100) every frame.
+// Returns a stop() function.
+// ============================================================================
+function createMicLevelMonitor(stream, onLevel) {
+    let running  = true;
+    const ctx      = new (window.AudioContext || window.webkitAudioContext)();
+    const source   = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+
+    function tick() {
+        if (!running) return;
+        analyser.getByteFrequencyData(data);
+        const avg = data.reduce((a, b) => a + b, 0) / data.length;
+        onLevel(Math.min(100, Math.round(avg * 2)));
+        requestAnimationFrame(tick);
+    }
+    tick();
+
+    return function stop() {
+        running = false;
+        try { source.disconnect(); ctx.close(); } catch (_) {}
+    };
 }
 
 // ============================================================================
@@ -235,24 +265,22 @@ function encodeWAV(samples, sampleRate) {
 // ============================================================================
 btnAnalyzeText.addEventListener('click', async () => {
     const text = textInput.value.trim();
-    if (!text) {
-        showToast("Please enter some text.");
-        return;
-    }
+    if (!text) { showToast("Please enter some text."); return; }
 
-    showLoading(true);
+    showLoading(true, 'Analyzing text...');
     btnAnalyzeText.disabled = true;
 
     try {
         const res = await fetch(`${API_BASE}/analyze/text`, {
-            method: 'POST',
+            method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text })
+            body:    JSON.stringify({ text }),
         });
-
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        const data = await res.json();
-        renderResults(data);
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        renderResults(await res.json());
     } catch (err) {
         showToast(err.message);
     } finally {
@@ -262,107 +290,144 @@ btnAnalyzeText.addEventListener('click', async () => {
 });
 
 // ============================================================================
-// Option 2: Voice Analysis (Upload + Record)
+// Option 2: Voice Analysis
 // ============================================================================
-let voiceBlob = null;
-let audioContext = null;       // AudioContext for PCM capture
-let scriptProcessor = null;    // ScriptProcessorNode
-let micStream = null;          // raw MediaStream (needed to stop tracks)
-let pcmSamples = [];           // accumulated Float32 samples
+let voiceBlob        = null;
+let voiceAudioCtx    = null;
+let voiceScriptProc  = null;
+let voiceMicStream   = null;
+let voicePcmSamples  = [];
 let isRecordingVoice = false;
+let voiceAnimFrame   = null;
 
-// File Upload Handler
-voiceFile.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (file) {
-        if (!file.name.toLowerCase().endsWith('.wav')) {
-            showToast("Please select a .wav file.");
-            voiceFile.value = '';
+// ── Waveform visualizer ───────────────────────────────────────────────────────
+function startVoiceVisualization(stream) {
+    if (!voiceWaveform) return;
+    voiceWaveform.innerHTML = '';
+
+    const BAR_COUNT = 20;
+    const bars = [];
+    for (let i = 0; i < BAR_COUNT; i++) {
+        const bar = document.createElement('div');
+        bar.className = 'wave-bar';
+        voiceWaveform.appendChild(bar);
+        bars.push(bar);
+    }
+
+    // Use a separate AudioContext just for visualisation
+    const visCtx     = new (window.AudioContext || window.webkitAudioContext)();
+    const visSrc     = visCtx.createMediaStreamSource(stream);
+    const visAnalyser = visCtx.createAnalyser();
+    visAnalyser.fftSize = 64;
+    visSrc.connect(visAnalyser);
+    const data = new Uint8Array(visAnalyser.frequencyBinCount);
+
+    function draw() {
+        if (!isRecordingVoice) {
+            try { visSrc.disconnect(); visCtx.close(); } catch (_) {}
+            bars.forEach(b => { b.style.height = '4px'; b.style.opacity = '0.3'; });
             return;
         }
-        fileNameDisplay.textContent = file.name;
-        voiceBlob = file;
-        btnAnalyzeVoice.disabled = false;
-        recordStatus.textContent = "File selected";
+        visAnalyser.getByteFrequencyData(data);
+        bars.forEach((bar, i) => {
+            const val    = data[Math.floor(i * data.length / BAR_COUNT)] || 0;
+            const height = Math.max(4, Math.round(val / 255 * 60));
+            bar.style.height  = `${height}px`;
+            bar.style.opacity = val > 10 ? '1' : '0.3';
+        });
+        voiceAnimFrame = requestAnimationFrame(draw);
     }
+    draw();
+}
+
+function stopVoiceVisualization() {
+    if (voiceAnimFrame) { cancelAnimationFrame(voiceAnimFrame); voiceAnimFrame = null; }
+    if (voiceWaveform)  voiceWaveform.innerHTML = '';
+}
+
+// ── File upload ───────────────────────────────────────────────────────────────
+voiceFile.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.wav')) {
+        showToast("Please select a .wav file.");
+        voiceFile.value = '';
+        return;
+    }
+    fileNameDisplay.textContent = file.name;
+    voiceBlob = file;
+    btnAnalyzeVoice.disabled = false;
+    recordStatus.textContent = "File selected — ready to analyze";
 });
 
-// ── Mic Record Handler (Bug 3 fix) ───────────────────────────────────────────
-// Previously used MediaRecorder which produces WebM/Ogg regardless of the
-// MIME type set on the Blob — soundfile on the server cannot parse it.
-//
-// New approach:
-//   1. Open AudioContext at 16 kHz (matches SpeechBrain / Whisper expectations)
-//   2. Pipe mic → ScriptProcessorNode to collect raw Float32 PCM samples
-//   3. On stop: encode samples into a real WAV Blob via encodeWAV()
-//   4. Server receives genuine 16-bit mono PCM WAV — soundfile parses cleanly
+// ── Record button ─────────────────────────────────────────────────────────────
 btnRecordVoice.addEventListener('click', async () => {
     if (isRecordingVoice) {
-        // ── Stop recording ────────────────────────────────────────────────────
+        // ── STOP ──────────────────────────────────────────────────────────────
         isRecordingVoice = false;
+        stopVoiceVisualization();
 
-        // Disconnect processor and close AudioContext
-        if (scriptProcessor) {
-            scriptProcessor.disconnect();
-            scriptProcessor = null;
-        }
-        if (audioContext) {
-            await audioContext.close();
-            audioContext = null;
-        }
-        // Stop mic tracks so the browser recording indicator disappears
-        if (micStream) {
-            micStream.getTracks().forEach(track => track.stop());
-            micStream = null;
+        if (voiceScriptProc) { voiceScriptProc.disconnect(); voiceScriptProc = null; }
+        if (voiceAudioCtx)   { await voiceAudioCtx.close();  voiceAudioCtx = null; }
+        if (voiceMicStream)  {
+            voiceMicStream.getTracks().forEach(t => t.stop());
+            voiceMicStream = null;
         }
 
-        // Encode all collected PCM samples into a real WAV Blob
-        const allSamples = new Float32Array(pcmSamples.reduce((acc, chunk) => {
-            const merged = new Float32Array(acc.length + chunk.length);
-            merged.set(acc);
-            merged.set(chunk, acc.length);
-            return merged;
-        }, new Float32Array(0)));
+        // Merge all PCM chunks and encode to WAV
+        const merged = voicePcmSamples.reduce((acc, chunk) => {
+            const out = new Float32Array(acc.length + chunk.length);
+            out.set(acc); out.set(chunk, acc.length);
+            return out;
+        }, new Float32Array(0));
 
-        voiceBlob = encodeWAV(allSamples, 16000);
+        voiceBlob = encodeWAV(merged, 16000);
+
+        // Client-side minimum size guard: 16000 bytes ≈ 0.5 s at 16kHz 16-bit mono
+        if (voiceBlob.size < 16000) {
+            showToast("Recording too short — please speak for at least 1 second.");
+            voiceBlob = null;
+            btnRecordVoice.classList.remove('recording');
+            btnRecordVoice.innerHTML = '<span class="record-icon">⏺</span> Record Voice';
+            recordStatus.textContent = "Ready";
+            return;
+        }
 
         btnRecordVoice.classList.remove('recording');
         btnRecordVoice.innerHTML = '<span class="record-icon">⏺</span> Record Voice';
-        recordStatus.textContent = "Recording captured";
+        recordStatus.textContent = "✅ Recording captured — click Analyze Voice";
         fileNameDisplay.textContent = "browser_recording.wav";
         btnAnalyzeVoice.disabled = false;
         voiceFile.value = '';
 
     } else {
-        // ── Start recording ───────────────────────────────────────────────────
+        // ── START ─────────────────────────────────────────────────────────────
         try {
-            micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            pcmSamples = [];
+            voiceMicStream  = await navigator.mediaDevices.getUserMedia({ audio: true });
+            voicePcmSamples = [];
 
-            // Use 16000 Hz to match what SpeechBrain and Whisper expect
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 16000
+            voiceAudioCtx = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 16000,
             });
 
-            const source = audioContext.createMediaStreamSource(micStream);
-
-            // ScriptProcessorNode collects raw PCM chunks
-            // bufferSize 4096 = ~256ms at 16kHz (good balance of latency vs overhead)
-            scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-            scriptProcessor.onaudioprocess = (e) => {
+            const source    = voiceAudioCtx.createMediaStreamSource(voiceMicStream);
+            voiceScriptProc = voiceAudioCtx.createScriptProcessor(4096, 1, 1);
+            voiceScriptProc.onaudioprocess = (e) => {
                 if (!isRecordingVoice) return;
-                // Copy the buffer — the underlying memory is reused after this callback
-                const chunk = new Float32Array(e.inputBuffer.getChannelData(0));
-                pcmSamples.push(chunk);
+                voicePcmSamples.push(
+                    new Float32Array(e.inputBuffer.getChannelData(0))
+                );
             };
-
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(audioContext.destination);
+            source.connect(voiceScriptProc);
+            voiceScriptProc.connect(voiceAudioCtx.destination);
 
             isRecordingVoice = true;
+            startVoiceVisualization(voiceMicStream);
+
             btnRecordVoice.classList.add('recording');
             btnRecordVoice.innerHTML = '<span class="record-icon">⏹</span> Stop Recording';
-            recordStatus.textContent = "Recording...";
+            recordStatus.textContent = "🔴 Recording... speak now";
+            btnAnalyzeVoice.disabled = true;
 
         } catch (err) {
             showToast("Microphone access denied or unavailable.");
@@ -371,12 +436,19 @@ btnRecordVoice.addEventListener('click', async () => {
     }
 });
 
-// Analyze Voice
+// ── Analyze button ────────────────────────────────────────────────────────────
 btnAnalyzeVoice.addEventListener('click', async () => {
     if (!voiceBlob) return;
 
-    showLoading(true);
+    if (voiceBlob.size < 16000) {
+        showToast("Recording too short. Please record at least 1 second of audio.");
+        return;
+    }
+
+    recordStatus.textContent = "📤 Sending for analysis...";
+    showLoading(true, 'Processing voice — this may take a few seconds...');
     btnAnalyzeVoice.disabled = true;
+    btnRecordVoice.disabled  = true;
 
     const formData = new FormData();
     formData.append(
@@ -388,17 +460,21 @@ btnAnalyzeVoice.addEventListener('click', async () => {
     try {
         const res = await fetch(`${API_BASE}/analyze/voice`, {
             method: 'POST',
-            body: formData
+            body:   formData,
         });
-
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        const data = await res.json();
-        renderResults(data);
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        recordStatus.textContent = "✅ Analysis complete";
+        renderResults(await res.json());
     } catch (err) {
+        recordStatus.textContent = "❌ Analysis failed";
         showToast(err.message);
     } finally {
         showLoading(false);
         btnAnalyzeVoice.disabled = false;
+        btnRecordVoice.disabled  = false;
     }
 });
 
@@ -406,73 +482,124 @@ btnAnalyzeVoice.addEventListener('click', async () => {
 // Option 3: Multimodal Session
 // ============================================================================
 let multimodalSessionId = null;
-let multimodalInterval = null;
-let multimodalSeconds = 0;
+let multimodalInterval  = null;
+let multimodalSeconds   = 0;
+let cameraStream        = null;
 
-async function stopMultimodalSession() {
-    if (!multimodalSessionId) return;
-
-    clearInterval(multimodalInterval);
-    btnStartMultimodal.style.display = 'inline-block';
-    btnStopMultimodal.style.display = 'none';
-    multimodalTimer.style.display = 'none';
-
-    showLoading(true);
-
+// ── Camera preview (browser-side only — gives user visual feedback) ───────────
+async function startCameraPreview() {
+    if (!cameraPreview) return;
     try {
-        const res = await fetch(`${API_BASE}/analyze/multimodal/stop`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: multimodalSessionId })
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: 320, height: 240, facingMode: 'user' },
+            audio: false,
         });
-
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        const data = await res.json();
-        renderResults(data);
+        cameraPreview.srcObject = cameraStream;
+        cameraPreview.style.display = 'block';
+        if (cameraPlaceholder) cameraPlaceholder.style.display = 'none';
+        cameraPreview.play();
+        if (multimodalStatus)
+            multimodalStatus.textContent = '📷 Camera active — server is recording';
     } catch (err) {
-        showToast(err.message);
-    } finally {
-        showLoading(false);
-        multimodalSessionId = null;
+        console.warn('Camera preview unavailable:', err.message);
+        if (multimodalStatus)
+            multimodalStatus.textContent =
+                '⚠️ Camera preview unavailable (server records independently)';
     }
 }
 
+function stopCameraPreview() {
+    if (cameraStream) {
+        cameraStream.getTracks().forEach(t => t.stop());
+        cameraStream = null;
+    }
+    if (cameraPreview) {
+        cameraPreview.srcObject = null;
+        cameraPreview.style.display = 'none';
+    }
+    if (cameraPlaceholder) cameraPlaceholder.style.display = 'flex';
+}
+
+// ── Stop session ──────────────────────────────────────────────────────────────
+async function stopMultimodalSession() {
+    if (!multimodalSessionId) return;
+
+    const sessionToStop = multimodalSessionId;
+    multimodalSessionId = null;   // clear immediately to prevent double-stop
+
+    clearInterval(multimodalInterval);
+    multimodalInterval = null;
+
+    btnStartMultimodal.style.display = 'inline-block';
+    btnStartMultimodal.disabled      = false;
+    btnStopMultimodal.style.display  = 'none';
+    multimodalTimer.style.display    = 'none';
+    stopCameraPreview();
+
+    if (multimodalStatus) multimodalStatus.textContent = '⏳ Processing recording...';
+    showLoading(true, 'Processing multimodal recording...');
+
+    try {
+        const res = await fetch(`${API_BASE}/analyze/multimodal/stop`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ session_id: sessionToStop }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        if (multimodalStatus) multimodalStatus.textContent = '✅ Analysis complete';
+        renderResults(await res.json());
+    } catch (err) {
+        if (multimodalStatus) multimodalStatus.textContent = `❌ ${err.message}`;
+        showToast(err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+// ── Start session ─────────────────────────────────────────────────────────────
 btnStartMultimodal.addEventListener('click', async () => {
     btnStartMultimodal.disabled = true;
+    if (multimodalStatus) multimodalStatus.textContent = '🚀 Starting recording...';
+
     try {
         const res = await fetch(`${API_BASE}/analyze/multimodal/start`, {
-            method: 'POST',
+            method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
+            body:    JSON.stringify({}),
         });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+        }
 
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        const data = await res.json();
-
+        const data          = await res.json();
         multimodalSessionId = data.session_id;
 
-        // Update UI
-        btnStartMultimodal.style.display = 'none';
-        btnStopMultimodal.style.display = 'inline-block';
-        multimodalTimer.style.display = 'flex';
+        await startCameraPreview();
 
-        // Start Timer
-        multimodalSeconds = 0;
+        btnStartMultimodal.style.display = 'none';
+        btnStopMultimodal.style.display  = 'inline-block';
+        multimodalTimer.style.display    = 'flex';
+
+        multimodalSeconds        = 0;
         timerDisplay.textContent = "00:00";
+
         multimodalInterval = setInterval(() => {
             multimodalSeconds++;
-            const s = String(multimodalSeconds).padStart(2, '0');
-            timerDisplay.textContent = `00:${s}`;
-
-            if (multimodalSeconds >= 30) {
-                stopMultimodalSession();
-            }
+            const mm = String(Math.floor(multimodalSeconds / 60)).padStart(2, '0');
+            const ss = String(multimodalSeconds % 60).padStart(2, '0');
+            timerDisplay.textContent = `${mm}:${ss}`;
+            if (multimodalSeconds >= 30) stopMultimodalSession();
         }, 1000);
 
     } catch (err) {
+        btnStartMultimodal.disabled      = false;
+        btnStartMultimodal.style.display = 'inline-block';
+        if (multimodalStatus) multimodalStatus.textContent = `❌ ${err.message}`;
         showToast(err.message);
-    } finally {
-        btnStartMultimodal.disabled = false;
     }
 });
 
@@ -481,56 +608,89 @@ btnStopMultimodal.addEventListener('click', stopMultimodalSession);
 // ============================================================================
 // Option 4: Live Stream (WebSocket)
 // ============================================================================
-let ws = null;
+let ws               = null;
+let streamMicStream  = null;
+let streamMicStopFn  = null;
+
+function stopStreamMicMonitor() {
+    if (streamMicStopFn)  { streamMicStopFn(); streamMicStopFn = null; }
+    if (streamMicStream)  {
+        streamMicStream.getTracks().forEach(t => t.stop());
+        streamMicStream = null;
+    }
+    if (streamMicLevel)   streamMicLevel.style.width = '0%';
+    if (micLevelWrapper)  micLevelWrapper.style.display = 'none';
+}
 
 function disconnectWebSocket() {
-    if (ws) {
-        ws.close();
-        ws = null;
-    }
-    btnConnectStream.style.display = 'inline-block';
-    btnDisconnectStream.style.display = 'none';
+    if (ws) { ws.close(); ws = null; }
+    stopStreamMicMonitor();
+    showLoading(false);
+    btnConnectStream.style.display      = 'inline-block';
+    btnConnectStream.disabled           = false;
+    btnDisconnectStream.style.display   = 'none';
     streamStatusContainer.style.display = 'none';
 }
 
-btnConnectStream.addEventListener('click', () => {
+btnConnectStream.addEventListener('click', async () => {
     btnConnectStream.disabled = true;
     streamStatusContainer.style.display = 'flex';
     streamStatusText.textContent = "Connecting...";
 
-    // ── Bug 8 fix ─────────────────────────────────────────────────────────────
-    // Previously hardcoded to 127.0.0.1:8000 while API_BASE used localhost:8000.
-    // Now derives host + port directly from API_BASE so both always match,
-    // and the app works correctly when deployed to any host/port.
-    const apiUrl   = new URL(API_BASE);
-    const wsProto  = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl    = `${wsProto}//${apiUrl.host}/ws/stream`;
+    // Start mic level monitor so user sees audio activity
+    try {
+        streamMicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (streamMicLevel && micLevelWrapper) {
+            micLevelWrapper.style.display = 'flex';
+            streamMicStopFn = createMicLevelMonitor(streamMicStream, (level) => {
+                streamMicLevel.style.width = `${level}%`;
+            });
+        }
+    } catch (e) {
+        console.warn('Stream mic monitor unavailable:', e.message);
+    }
+
+    const apiUrl  = new URL(API_BASE);
+    const wsProto = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    // LS3: append current session_id to inherit conversation history
+    const sessionParam = currentSessionId ? `&session_id=${encodeURIComponent(currentSessionId)}` : '';
+    const wsUrl   = `${wsProto}//${apiUrl.host}/ws/stream?_=${Date.now()}${sessionParam}`;
 
     ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
-        btnConnectStream.style.display = 'none';
+        btnConnectStream.style.display    = 'none';
         btnDisconnectStream.style.display = 'inline-block';
-        btnConnectStream.disabled = false;
-        streamStatusText.textContent = "Connected. Speak now...";
+        btnConnectStream.disabled         = false;
+        streamStatusText.textContent      = "🔴 Connected — speak now...";
     };
 
     ws.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data);
+            // LS1: server mic unavailable — show error and disconnect cleanly
+            if (data.type === 'error') {
+                showToast(data.message || 'Streaming error occurred.', 'error');
+                disconnectWebSocket();
+                return;
+            }
+            // Status / control messages
             if (data.type === 'status') {
-                streamStatusText.textContent = data.message;
-            } else if (data.session_id) {
+                streamStatusText.textContent = data.message || "Connected";
+                return;
+            }
+            // Emotion payload
+            if (data.session_id) {
                 renderResults(data);
-                streamStatusText.textContent = "Analyzing... Speak again.";
+                streamStatusText.textContent = "✅ Result received — speak again...";
+                return;
             }
         } catch (e) {
-            console.error("WS Parse error", e);
+            console.error("WS parse error:", e);
         }
     };
 
-    ws.onerror = (error) => {
-        console.error("WS Error:", error);
+    ws.onerror = () => {
         showToast("WebSocket connection error.");
         disconnectWebSocket();
     };
