@@ -3,24 +3,8 @@ src/core/model_registry.py
 ===========================
 Central singleton registry that owns all ML model instances.
 
-Rules:
-    - Models are loaded ONCE at startup via registry.load_all()
-    - Every module that needs a model calls registry.get("model_name")
-    - No module ever instantiates WhisperModel, SEREngine, or pipeline directly
-    - Thread safe — _lock prevents double-loading
-    - FastAPI lifespan guarantees load_all() completes before first request
-
-Usage:
-    # Startup (api.py lifespan):
-    from src.core.model_registry import registry
-    registry.load_all()
-
-    # Anywhere in codebase:
-    from src.core.model_registry import registry
-    model = registry.get("whisper")
-    model = registry.get("roberta")
-    model = registry.get("speechbrain")
-    model = registry.get("faster_whisper")
+TEXT_ONLY_MODE=true  → loads only RoBERTa (~350MB RAM)
+TEXT_ONLY_MODE=false → loads all 4 models (~1.4GB RAM)
 """
 
 import os
@@ -32,24 +16,16 @@ PROJECT_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
 
-# Cache paths — must match scripts/download_models.py exactly
+# Cache paths
 WHISPER_CACHE        = os.path.join(PROJECT_ROOT, "external", "whisper")
 FASTER_WHISPER_CACHE = os.path.join(PROJECT_ROOT, "external", "faster_whisper")
 SPEECHBRAIN_CACHE    = os.path.join(PROJECT_ROOT, "external", "speechbrain")
 
+# ── Read mode flag ─────────────────────────────────────────────────────────────
+from src.core.config import TEXT_ONLY_MODE
+
 
 class ModelRegistry:
-    """
-    Singleton that holds all ML model instances.
-
-    Internal store:
-        _models = {
-            "roberta":        HuggingFace pipeline object,
-            "whisper":        openai-whisper model object,
-            "faster_whisper": faster_whisper WhisperModel object,
-            "speechbrain":    SpeechBrain classifier object,
-        }
-    """
 
     def __init__(self):
         self._models:     dict = {}
@@ -57,30 +33,31 @@ class ModelRegistry:
         self._loaded            = False
         self._load_times: dict  = {}
 
-    # ── Public API ────────────────────────────────────────────────────────────
-
     def load_all(self):
-        """
-        Loads every model in sequence.
-        Idempotent — safe to call multiple times, only executes once.
-        Must be called from api.py lifespan BEFORE yield.
-        """
         with self._lock:
             if self._loaded:
                 print("[Registry] Already loaded — skipping.")
                 return
 
             print("\n[Registry] ══════════════════════════════════════")
-            print("[Registry] Loading all models into memory...")
+            if TEXT_ONLY_MODE:
+                print("[Registry] TEXT_ONLY_MODE=true — loading RoBERTa only")
+            else:
+                print("[Registry] Loading all models into memory...")
             print("[Registry] ══════════════════════════════════════")
 
-            # Lightest first so startup feels progressive
-            loaders = [
-                ("roberta",        self._load_roberta),
-                ("faster_whisper", self._load_faster_whisper),
-                ("whisper",        self._load_whisper),
-                ("speechbrain",    self._load_speechbrain),
-            ]
+            # ── Build loader list based on mode ───────────────────────────────
+            if TEXT_ONLY_MODE:
+                loaders = [
+                    ("roberta", self._load_roberta),
+                ]
+            else:
+                loaders = [
+                    ("roberta",        self._load_roberta),
+                    ("faster_whisper", self._load_faster_whisper),
+                    ("whisper",        self._load_whisper),
+                    ("speechbrain",    self._load_speechbrain),
+                ]
 
             failed = []
             for name, fn in loaders:
@@ -99,35 +76,25 @@ class ModelRegistry:
             print("[Registry] ══════════════════════════════════════")
             if failed:
                 print(f"[Registry] ⚠️  Failed: {failed}")
-                print("[Registry] Affected endpoints will return 503.")
             else:
                 print("[Registry] 🎉 All models ready.")
             print("[Registry] ══════════════════════════════════════\n")
 
     def get(self, name: str):
-        """
-        Returns model instance by name.
-        Raises RuntimeError if model is unavailable.
-
-        Valid names: "roberta", "whisper", "faster_whisper", "speechbrain"
-        """
         if name not in self._models:
             raise RuntimeError(
                 f"[Registry] Model '{name}' is not available. "
-                f"Either load_all() was not called, it failed to load, "
-                f"or download_models.py was never run. "
                 f"Available: {list(self._models.keys())}"
             )
         return self._models[name]
 
     def is_available(self, name: str) -> bool:
-        """Non-raising check — use this for graceful degradation."""
         return name in self._models
 
     def status(self) -> dict:
-        """Returns health dict for the /health endpoint."""
         return {
-            "loaded": self._loaded,
+            "loaded":      self._loaded,
+            "mode":        "text_only" if TEXT_ONLY_MODE else "full",
             "models": {
                 name: {
                     "available":         name in self._models,
@@ -150,21 +117,17 @@ class ModelRegistry:
     def _load_whisper(self):
         import whisper
         self._models["whisper"] = whisper.load_model(
-            "base",
-            download_root=WHISPER_CACHE,
+            "base", download_root=WHISPER_CACHE,
         )
 
     def _load_faster_whisper(self):
         from faster_whisper import WhisperModel
         self._models["faster_whisper"] = WhisperModel(
-            "tiny",
-            device="cpu",
-            compute_type="int8",
+            "tiny", device="cpu", compute_type="int8",
             download_root=FASTER_WHISPER_CACHE,
         )
 
     def _load_speechbrain(self):
-        # Patches must run before speechbrain import
         self._apply_speechbrain_patches()
         from speechbrain.inference.interfaces import foreign_class
         self._models["speechbrain"] = foreign_class(
@@ -176,12 +139,6 @@ class ModelRegistry:
         )
 
     def _apply_speechbrain_patches(self):
-        """
-        Compatibility patches for SpeechBrain 1.0.3 + newer libs.
-        Order matters — torchaudio must be fully patched before
-        speechbrain is imported anywhere in the call stack.
-        """
-        # ── Patch 1: torchaudio — MUST come before speechbrain import ─────────
         import torchaudio
         import soundfile as sf
         import numpy as np
@@ -189,10 +146,8 @@ class ModelRegistry:
 
         if not hasattr(torchaudio, "list_audio_backends"):
             torchaudio.list_audio_backends = lambda: ["soundfile"]
-
         if not hasattr(torchaudio, "get_audio_backend"):
             torchaudio.get_audio_backend = lambda: "soundfile"
-
         if not getattr(torchaudio, "_patched_by_ser_engine", False):
             def _custom_load(filepath, **kwargs):
                 data, samplerate = sf.read(filepath)
@@ -202,31 +157,25 @@ class ModelRegistry:
                 else:
                     tensor = torch.from_numpy(data.transpose())
                 return tensor, samplerate
-
             torchaudio.load = _custom_load
             torchaudio._patched_by_ser_engine = True
 
-        # ── Patch 2: transformers removed AutoModelWithLMHead in v5 ──────────
         import transformers
         if not hasattr(transformers, "AutoModelWithLMHead"):
             transformers.AutoModelWithLMHead = getattr(
                 transformers, "AutoModelForCausalLM", transformers.AutoModel
             )
 
-        # ── Patch 3: huggingface_hub dropped use_auth_token param ─────────────
         import huggingface_hub
         if not getattr(huggingface_hub, "_patched_by_ser_engine", False):
             _original = huggingface_hub.hf_hub_download
-
             def _patched(*args, **kwargs):
                 if "use_auth_token" in kwargs:
                     kwargs["token"] = kwargs.pop("use_auth_token")
                 return _original(*args, **kwargs)
-
             huggingface_hub.hf_hub_download        = _patched
             huggingface_hub._patched_by_ser_engine = True
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────
-# Import this everywhere: from src.core.model_registry import registry
 registry = ModelRegistry()
