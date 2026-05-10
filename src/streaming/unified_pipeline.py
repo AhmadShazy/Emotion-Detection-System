@@ -3,17 +3,11 @@ src/streaming/unified_pipeline.py
 ==================================
 Central emotion pipeline with thread-safe per-session state.
 
-Session Lifecycle (Option A — auto-create):
-  - First request with a new session_id  → session created automatically
-  - Each request updates last_active timestamp
-  - Background thread expires sessions idle > SESSION_TIMEOUT_MINUTES
-  - Session ID is returned in every payload so the client can reuse it
-
-Thread Safety:
-  - _sessions_lock guards the session store dict
-  - Each session has its own Lock so concurrent requests for the
-    SAME session queue up rather than corrupting shared state
-  - Different sessions never block each other
+Conversation history removed — context window is managed by LLM side.
+Sessions are kept for:
+  - Per-user isolated EmotionStateManager (emotion smoothing)
+  - Per-user isolated LLMAdapter
+  - Thread safety across concurrent requests
 """
 
 import json
@@ -27,32 +21,28 @@ from src.streaming.llm_adapter import LLMAdapter
 
 # ── Session configuration ─────────────────────────────────────────────────────
 SESSION_TIMEOUT_MINUTES = 30
-SESSION_HISTORY_MAX     = 6       # sliding window kept per session
 
 # ── Session store ─────────────────────────────────────────────────────────────
-# { session_id: _Session }
-_sessions: dict       = {}
-_sessions_lock        = threading.Lock()  # guards the dict itself
+_sessions: dict   = {}
+_sessions_lock    = threading.Lock()
 
 
 # ── Session object ────────────────────────────────────────────────────────────
 
 class _Session:
     """
-    Holds all mutable state that belongs to one user/conversation.
-    Each session is isolated — no shared state between sessions.
+    Holds per-user isolated state.
+    Conversation history removed — LLM handles context on its side.
     """
     def __init__(self, session_id: str):
-        self.session_id           = session_id
-        self.created_at           = time.time()
-        self.last_active          = time.time()
-        self.conversation_history = []          # list of turn dicts
-        self.state_manager        = EmotionStateManager()
-        self.llm_adapter          = LLMAdapter()
-        self.lock                 = threading.Lock()  # per-session concurrency guard
+        self.session_id  = session_id
+        self.created_at  = time.time()
+        self.last_active = time.time()
+        self.state_manager = EmotionStateManager()
+        self.llm_adapter   = LLMAdapter()
+        self.lock          = threading.Lock()
 
     def touch(self):
-        """Updates last_active to now, preventing timeout expiry."""
         self.last_active = time.time()
 
     def is_expired(self):
@@ -63,17 +53,10 @@ class _Session:
 # ── Session manager helpers ───────────────────────────────────────────────────
 
 def get_or_create_session(session_id: str | None = None) -> _Session:
-    """
-    Returns an existing session or creates a new one.
-
-    If session_id is None or unknown, a fresh session is created and its
-    ID is returned inside the session object (auto-create pattern).
-    """
     with _sessions_lock:
-        # Auto-generate ID if none provided or if it's expired/unknown
         if session_id is None or session_id not in _sessions:
-            new_id   = session_id or f"sess-{uuid.uuid4().hex[:8]}"
-            session  = _Session(new_id)
+            new_id  = session_id or f"sess-{uuid.uuid4().hex[:8]}"
+            session = _Session(new_id)
             _sessions[new_id] = session
             return session
 
@@ -83,7 +66,6 @@ def get_or_create_session(session_id: str | None = None) -> _Session:
 
 
 def close_session(session_id: str) -> bool:
-    """Explicitly removes a session. Returns True if it existed."""
     with _sessions_lock:
         return _sessions.pop(session_id, None) is not None
 
@@ -96,12 +78,8 @@ def active_session_count() -> int:
 # ── Background expiry thread ──────────────────────────────────────────────────
 
 def _expiry_worker():
-    """
-    Runs forever as a daemon thread.
-    Every 5 minutes it sweeps the session store and removes expired sessions.
-    """
     while True:
-        time.sleep(5 * 60)  # check every 5 minutes
+        time.sleep(5 * 60)
         with _sessions_lock:
             expired = [sid for sid, s in _sessions.items() if s.is_expired()]
             for sid in expired:
@@ -109,18 +87,15 @@ def _expiry_worker():
                 print(f"[Session] ⏱  Expired session removed: {sid}")
 
 
-# Start expiry daemon once when module is first imported
-_expiry_thread = threading.Thread(target=_expiry_worker, daemon=True, name="session-expiry")
+_expiry_thread = threading.Thread(
+    target=_expiry_worker, daemon=True, name="session-expiry"
+)
 _expiry_thread.start()
 
 
-# ── Text state builder (shared utility) ──────────────────────────────────────
+# ── Text state builder ────────────────────────────────────────────────────────
 
 def build_text_state(text: str, te_results: list) -> dict | None:
-    """
-    Converts raw text + RoBERTa results into a standardised text_state dict
-    consumed by EmotionStateManager.fuse().
-    """
     if not text or text == "N/A":
         return None
 
@@ -161,34 +136,20 @@ def process_and_print_unified_json(
     Routes emotion states through the per-session pipeline and returns
     the final V2 JSON payload.
 
-    Parameters
-    ----------
-    text_state, voice_state, face_state : dicts from respective workers
-    raw_text       : original transcription / typed text
-    voice_emo_raw  : raw SER label string
-    face_emo_raw   : raw face classifier label string
-    session_id     : optional — auto-created if None or unknown
-    on_payload     : optional callback(dict) — used by WebSocket router
-                     to push each turn's payload to the connected client.
-                     CLI / live_orchestrator callers leave this as None.
-
-    Returns
-    -------
-    dict — the full V2 payload (same shape as UnifiedEmotionResponse schema)
+    Conversation history is NOT stored here.
+    Context window management is handled by the LLM side.
     """
     # ── 1. Get or create isolated session ─────────────────────────────────────
     session = get_or_create_session(session_id)
 
-    # Per-session lock ensures concurrent requests for the SAME session
-    # are serialised rather than corrupting shared state.
     with session.lock:
 
-        # ── 2. Decision-level fusion ──────────────────────────────────────────
+        # ── 2. Fusion ─────────────────────────────────────────────────────────
         unified_emotion_data = session.state_manager.fuse(
             text_state, voice_state, face_state
         )
 
-        # ── 3. Build raw inputs for LLM adapter ───────────────────────────────
+        # ── 3. Build raw inputs ───────────────────────────────────────────────
         now_str = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
         raw_inputs = {
@@ -200,42 +161,23 @@ def process_and_print_unified_json(
 
         context = {
             "session_id": session.session_id,
-            "conversation_history": [
-                {"role": t["speaker"], "content": t["text"]}
-                for t in session.conversation_history
-            ],
-            "turns": session.conversation_history,
         }
 
-        # ── 4. LLM adapter processing ─────────────────────────────────────────
+        # ── 4. LLM adapter ────────────────────────────────────────────────────
         payload = session.llm_adapter.process(
             fusion_output=unified_emotion_data,
             raw_inputs=raw_inputs,
             context=context,
         )
 
-        # ── 5. Update this session's conversation history ─────────────────────
-        turn_record = {
-            "speaker":   "user",
-            "timestamp": now_str,
-            "text":      raw_text,
-            "emotion":   payload["emotion_analysis"]["dominant_emotion"],
-            "tone":      payload["tone_analysis"]["tone"],
-        }
-        session.conversation_history.append(turn_record)
-
-        # Enforce sliding window
-        if len(session.conversation_history) > SESSION_HISTORY_MAX:
-            session.conversation_history.pop(0)
-
-    # ── 6. Server-side log (harmless in API mode) ─────────────────────────────
+    # ── 5. Server-side log ────────────────────────────────────────────────────
     print("\n" + "=" * 80)
     print(">>> OUTBOUND V2 PAYLOAD")
     print("=" * 80)
     print(json.dumps(payload, indent=2))
     print("=" * 80)
 
-    # ── 7. Optional push callback (WebSocket router) ──────────────────────────
+    # ── 6. Optional WebSocket push ────────────────────────────────────────────
     if on_payload is not None:
         on_payload(payload)
 
