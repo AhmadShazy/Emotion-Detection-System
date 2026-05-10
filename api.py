@@ -5,6 +5,8 @@ Humanoid Assistant V2 API
 
 TEXT_ONLY_MODE=true  → only /analyze/text + /health exposed
 TEXT_ONLY_MODE=false → all endpoints exposed
+
+Localhost requests bypass API key check for local development.
 """
 
 import sys
@@ -22,7 +24,7 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from routers import text
-from src.core.config import TEXT_ONLY_MODE
+from src.core.config import TEXT_ONLY_MODE, API_KEY
 
 # ── Conditionally import disabled routers ─────────────────────────────────────
 if not TEXT_ONLY_MODE:
@@ -33,26 +35,34 @@ if not TEXT_ONLY_MODE:
 # API Key Middleware
 # ════════════════════════════════════════════════════════════════════════════
 
-from src.core.config import API_KEY
+# Hosts that bypass API key check — local development only
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
+
 
 class APIKeyMiddleware:
     """
     Checks X-API-Key header on every request.
-    Skips check for /health and /docs and /redoc and /openapi.json
-    so monitoring and documentation still work without a key.
+
+    Skips check for:
+      - /health, /docs, /redoc, /openapi.json  (monitoring + docs)
+      - requests from localhost / 127.0.0.1    (local dev access)
     """
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            # Build a minimal request object to read headers
             request = Request(scope, receive)
             path    = request.url.path
+            host    = request.url.hostname or ""
 
-            # These paths are always public
+            # Always public — monitoring and docs
             open_paths = ["/health", "/docs", "/redoc", "/openapi.json"]
-            if not any(path.startswith(p) for p in open_paths):
+
+            # Local development — skip key check
+            is_local = host in _LOCAL_HOSTS
+
+            if not any(path.startswith(p) for p in open_paths) and not is_local:
                 key = request.headers.get("X-API-Key", "")
                 if API_KEY and key != API_KEY:
                     response = JSONResponse(
@@ -131,8 +141,11 @@ async def health():
 _frontend_dir = os.path.join(PROJECT_ROOT, "frontend")
 
 if os.path.isdir(_frontend_dir):
+    print(f"[STARTUP] Mounting frontend from: {_frontend_dir}")
     app.mount(
         "/",
         StaticFiles(directory=_frontend_dir, html=True),
         name="frontend",
     )
+else:
+    print(f"[STARTUP] ⚠️  Frontend directory not found at: {_frontend_dir}")
