@@ -35,9 +35,9 @@ if not TEXT_ONLY_MODE:
 # API Key Middleware
 # ════════════════════════════════════════════════════════════════════════════
 
-# Hosts that bypass API key check — local development only
-_LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
-
+# Hosts that bypass API key check — controlled by ALLOW_LOCALHOST in .env
+from src.core.config import ALLOW_LOCALHOST
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"} if ALLOW_LOCALHOST else set()
 
 class APIKeyMiddleware:
     """

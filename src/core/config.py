@@ -20,3 +20,6 @@ API_KEY: str = os.getenv("API_KEY", "")
 
 # ── LLM Forwarding ────────────────────────────────────────────────────────────
 LLM_ENDPOINT_URL: str = os.getenv("LLM_ENDPOINT_URL", "")
+
+# ── Local Development ─────────────────────────────────────────────────────────
+ALLOW_LOCALHOST: bool = os.getenv("ALLOW_LOCALHOST", "false").lower() == "true"
