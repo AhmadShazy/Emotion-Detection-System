@@ -1,57 +1,119 @@
 // ============================================================================
+// Mode Detection — called on startup
+// Fetches /health to determine which features are available
+// and dynamically shows/hides tabs accordingly
+// ============================================================================
+const API_BASE = `${window.location.protocol}//${window.location.host}`;
+
+let currentTab       = 'text';
+let currentSessionId = null;
+let availableMode    = 'text_only'; // default safe assumption
+
+// ── Fetch mode from server ────────────────────────────────────────────────────
+async function detectServerMode() {
+    try {
+        const res  = await fetch(`${API_BASE}/health`);
+        const data = await res.json();
+        availableMode = data.mode || 'text_only';
+    } catch (e) {
+        console.warn('[Mode] Could not reach /health — defaulting to text_only');
+        availableMode = 'text_only';
+    }
+    applyModeToUI();
+}
+
+// ── Apply mode to tabs ────────────────────────────────────────────────────────
+function applyModeToUI() {
+    const modeMap = {
+        'text_only': ['text'],
+        'full':      ['text', 'voice', 'multimodal', 'stream'],
+    };
+
+    const enabledTabs = modeMap[availableMode] || ['text'];
+
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        const tab = btn.getAttribute('data-tab');
+        if (!enabledTabs.includes(tab)) {
+            btn.classList.add('tab-disabled');
+            btn.setAttribute('disabled', true);
+            btn.setAttribute('title', 'Coming Soon');
+
+            // Add coming soon badge
+            if (!btn.querySelector('.coming-soon-badge')) {
+                const badge = document.createElement('span');
+                badge.className = 'coming-soon-badge';
+                badge.textContent = 'Soon';
+                btn.appendChild(badge);
+            }
+        } else {
+            btn.classList.remove('tab-disabled');
+            btn.removeAttribute('disabled');
+            btn.removeAttribute('title');
+        }
+    });
+
+    // If current tab got disabled, switch to text
+    if (!enabledTabs.includes(currentTab)) {
+        switchTab('text');
+    }
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(tabName) {
+    if (ws) disconnectWebSocket();
+    if (typeof multimodalSessionId !== 'undefined' && multimodalSessionId) {
+        stopMultimodalSession();
+    }
+
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+
+    const btn  = document.querySelector(`.tab-btn[data-tab="${tabName}"]`);
+    const pane = document.getElementById(`tab-${tabName}`);
+
+    if (btn && !btn.hasAttribute('disabled')) {
+        btn.classList.add('active');
+        currentTab = tabName;
+    }
+    if (pane) pane.classList.add('active');
+
+    resultsPanel.style.display = 'none';
+    if (jsonPanel) jsonPanel.style.display = 'none';
+}
+
+// ============================================================================
 // State & Elements
 // ============================================================================
-// Derive API base from current browser location so the app works on any
-// host / port without code changes (localhost, LAN IP, production domain).
-// Since FastAPI serves this file from the same origin, window.location always
-// points at the correct API server.
-const API_BASE = `${window.location.protocol}//${window.location.host}`;
-let currentTab       = 'text';
-let currentSessionId = null;   // LS3: track latest session_id across all tabs
-
-// Theme
-const themeToggle = document.getElementById('theme-toggle');
-const htmlEl = document.documentElement;
-
-// Tabs
-const tabBtns = document.querySelectorAll('.tab-btn');
-const tabPanes = document.querySelectorAll('.tab-pane');
-
-// Overlay & Results
-const loadingOverlay  = document.getElementById('loading-overlay');
-const resultsPanel    = document.getElementById('results-panel');
-const toastContainer  = document.getElementById('toast-container');
-const jsonPanel       = document.getElementById('json-panel');
-const jsonOutput      = document.getElementById('json-output');
-
-// Text
-const textInput      = document.getElementById('text-input');
-const btnAnalyzeText = document.getElementById('btn-analyze-text');
-
-// Voice
-const btnRecordVoice  = document.getElementById('btn-record-voice');
-const recordStatus    = document.getElementById('record-status');
-const voiceFile       = document.getElementById('voice-file');
-const fileNameDisplay = document.getElementById('file-name');
-const btnAnalyzeVoice = document.getElementById('btn-analyze-voice');
-const voiceWaveform   = document.getElementById('voice-waveform');
-
-// Multimodal
-const btnStartMultimodal = document.getElementById('btn-start-multimodal');
-const btnStopMultimodal  = document.getElementById('btn-stop-multimodal');
-const multimodalTimer    = document.getElementById('multimodal-timer');
-const timerDisplay       = document.getElementById('timer-display');
-const cameraPreview      = document.getElementById('camera-preview');
-const cameraPlaceholder  = document.getElementById('camera-placeholder');
-const multimodalStatus   = document.getElementById('multimodal-status');
-
-// Stream
-const btnConnectStream      = document.getElementById('btn-connect-stream');
-const btnDisconnectStream   = document.getElementById('btn-disconnect-stream');
+const themeToggle         = document.getElementById('theme-toggle');
+const htmlEl              = document.documentElement;
+const tabBtns             = document.querySelectorAll('.tab-btn');
+const tabPanes            = document.querySelectorAll('.tab-pane');
+const loadingOverlay      = document.getElementById('loading-overlay');
+const resultsPanel        = document.getElementById('results-panel');
+const toastContainer      = document.getElementById('toast-container');
+const jsonPanel           = document.getElementById('json-panel');
+const jsonOutput          = document.getElementById('json-output');
+const textInput           = document.getElementById('text-input');
+const btnAnalyzeText      = document.getElementById('btn-analyze-text');
+const btnRecordVoice      = document.getElementById('btn-record-voice');
+const recordStatus        = document.getElementById('record-status');
+const voiceFile           = document.getElementById('voice-file');
+const fileNameDisplay     = document.getElementById('file-name');
+const btnAnalyzeVoice     = document.getElementById('btn-analyze-voice');
+const voiceWaveform       = document.getElementById('voice-waveform');
+const btnStartMultimodal  = document.getElementById('btn-start-multimodal');
+const btnStopMultimodal   = document.getElementById('btn-stop-multimodal');
+const multimodalTimer     = document.getElementById('multimodal-timer');
+const timerDisplay        = document.getElementById('timer-display');
+const cameraPreview       = document.getElementById('camera-preview');
+const cameraPlaceholder   = document.getElementById('camera-placeholder');
+const multimodalStatus    = document.getElementById('multimodal-status');
+const btnConnectStream    = document.getElementById('btn-connect-stream');
+const btnDisconnectStream = document.getElementById('btn-disconnect-stream');
 const streamStatusContainer = document.getElementById('stream-status-container');
-const streamStatusText      = document.getElementById('stream-status-text');
-const streamMicLevel        = document.getElementById('stream-mic-level');
-const micLevelWrapper       = document.getElementById('mic-level-wrapper');
+const streamStatusText    = document.getElementById('stream-status-text');
+const streamMicLevel      = document.getElementById('stream-mic-level');
+const micLevelWrapper     = document.getElementById('mic-level-wrapper');
 
 // ============================================================================
 // Theme Management
@@ -73,21 +135,16 @@ themeToggle.addEventListener('click', () => {
 // ============================================================================
 tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
-        // Cleanup any active sessions / streams when switching tabs
+        if (btn.hasAttribute('disabled')) return;
+        const tab = btn.getAttribute('data-tab');
         if (ws) disconnectWebSocket();
-        if (multimodalSessionId) stopMultimodalSession();
+        if (typeof multimodalSessionId !== 'undefined' && multimodalSessionId) {
+            stopMultimodalSession();
+        }
         stopCameraPreview();
         stopVoiceVisualization();
         stopStreamMicMonitor();
-
-        tabBtns.forEach(b => b.classList.remove('active'));
-        tabPanes.forEach(p => p.classList.remove('active'));
-        btn.classList.add('active');
-        currentTab = btn.getAttribute('data-tab');
-        document.getElementById(`tab-${currentTab}`).classList.add('active');
-
-        resultsPanel.style.display = 'none';
-        if (jsonPanel) jsonPanel.style.display = 'none';
+        switchTab(tab);
     });
 });
 
@@ -135,7 +192,6 @@ function getEmotionColor(emotion) {
 function renderResults(payload) {
     if (!payload) return;
 
-    // LS3: track session_id so streaming can inherit conversation history
     if (payload.session_id) currentSessionId = payload.session_id;
 
     const { user_input, emotion_analysis, tone_analysis } = payload;
@@ -151,8 +207,7 @@ function renderResults(payload) {
     document.getElementById('res-dominant-conf').textContent =
         `${Math.round(emotion_analysis.confidence * 100)}%`;
 
-    document.getElementById('res-tone').textContent =
-        tone_analysis.tone;
+    document.getElementById('res-tone').textContent      = tone_analysis.tone;
     document.getElementById('res-tone-conf').textContent =
         `${Math.round(tone_analysis.confidence * 100)}%`;
 
@@ -195,13 +250,13 @@ function renderResults(payload) {
 // WAV Encoder
 // ============================================================================
 function encodeWAV(samples, sampleRate) {
-    const numChannels  = 1;
+    const numChannels   = 1;
     const bitsPerSample = 16;
-    const byteRate     = sampleRate * numChannels * bitsPerSample / 8;
-    const blockAlign   = numChannels * bitsPerSample / 8;
-    const dataLength   = samples.length * 2;
-    const buffer       = new ArrayBuffer(44 + dataLength);
-    const view         = new DataView(buffer);
+    const byteRate      = sampleRate * numChannels * bitsPerSample / 8;
+    const blockAlign    = numChannels * bitsPerSample / 8;
+    const dataLength    = samples.length * 2;
+    const buffer        = new ArrayBuffer(44 + dataLength);
+    const view          = new DataView(buffer);
 
     const writeStr = (off, str) => {
         for (let i = 0; i < str.length; i++)
@@ -212,13 +267,13 @@ function encodeWAV(samples, sampleRate) {
     view.setUint32(4,  36 + dataLength, true);
     writeStr(8,  'WAVE');
     writeStr(12, 'fmt ');
-    view.setUint32(16, 16,            true);
-    view.setUint16(20,  1,            true);
-    view.setUint16(22,  numChannels,  true);
-    view.setUint32(24,  sampleRate,   true);
-    view.setUint32(28,  byteRate,     true);
-    view.setUint16(32,  blockAlign,   true);
-    view.setUint16(34,  bitsPerSample,true);
+    view.setUint32(16, 16,             true);
+    view.setUint16(20,  1,             true);
+    view.setUint16(22,  numChannels,   true);
+    view.setUint32(24,  sampleRate,    true);
+    view.setUint32(28,  byteRate,      true);
+    view.setUint16(32,  blockAlign,    true);
+    view.setUint16(34,  bitsPerSample, true);
     writeStr(36, 'data');
     view.setUint32(40, dataLength, true);
 
@@ -232,12 +287,10 @@ function encodeWAV(samples, sampleRate) {
 }
 
 // ============================================================================
-// Mic Level Monitor — shared utility
-// Creates an AnalyserNode on a stream and calls onLevel(0-100) every frame.
-// Returns a stop() function.
+// Mic Level Monitor
 // ============================================================================
 function createMicLevelMonitor(stream, onLevel) {
-    let running  = true;
+    let running    = true;
     const ctx      = new (window.AudioContext || window.webkitAudioContext)();
     const source   = ctx.createMediaStreamSource(stream);
     const analyser = ctx.createAnalyser();
@@ -300,7 +353,6 @@ let voicePcmSamples  = [];
 let isRecordingVoice = false;
 let voiceAnimFrame   = null;
 
-// ── Waveform visualizer ───────────────────────────────────────────────────────
 function startVoiceVisualization(stream) {
     if (!voiceWaveform) return;
     voiceWaveform.innerHTML = '';
@@ -314,9 +366,8 @@ function startVoiceVisualization(stream) {
         bars.push(bar);
     }
 
-    // Use a separate AudioContext just for visualisation
-    const visCtx     = new (window.AudioContext || window.webkitAudioContext)();
-    const visSrc     = visCtx.createMediaStreamSource(stream);
+    const visCtx      = new (window.AudioContext || window.webkitAudioContext)();
+    const visSrc      = visCtx.createMediaStreamSource(stream);
     const visAnalyser = visCtx.createAnalyser();
     visAnalyser.fftSize = 64;
     visSrc.connect(visAnalyser);
@@ -345,7 +396,6 @@ function stopVoiceVisualization() {
     if (voiceWaveform)  voiceWaveform.innerHTML = '';
 }
 
-// ── File upload ───────────────────────────────────────────────────────────────
 voiceFile.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -360,10 +410,8 @@ voiceFile.addEventListener('change', (e) => {
     recordStatus.textContent = "File selected — ready to analyze";
 });
 
-// ── Record button ─────────────────────────────────────────────────────────────
 btnRecordVoice.addEventListener('click', async () => {
     if (isRecordingVoice) {
-        // ── STOP ──────────────────────────────────────────────────────────────
         isRecordingVoice = false;
         stopVoiceVisualization();
 
@@ -374,7 +422,6 @@ btnRecordVoice.addEventListener('click', async () => {
             voiceMicStream = null;
         }
 
-        // Merge all PCM chunks and encode to WAV
         const merged = voicePcmSamples.reduce((acc, chunk) => {
             const out = new Float32Array(acc.length + chunk.length);
             out.set(acc); out.set(chunk, acc.length);
@@ -383,7 +430,6 @@ btnRecordVoice.addEventListener('click', async () => {
 
         voiceBlob = encodeWAV(merged, 16000);
 
-        // Client-side minimum size guard: 16000 bytes ≈ 0.5 s at 16kHz 16-bit mono
         if (voiceBlob.size < 16000) {
             showToast("Recording too short — please speak for at least 1 second.");
             voiceBlob = null;
@@ -401,7 +447,6 @@ btnRecordVoice.addEventListener('click', async () => {
         voiceFile.value = '';
 
     } else {
-        // ── START ─────────────────────────────────────────────────────────────
         try {
             voiceMicStream  = await navigator.mediaDevices.getUserMedia({ audio: true });
             voicePcmSamples = [];
@@ -436,10 +481,8 @@ btnRecordVoice.addEventListener('click', async () => {
     }
 });
 
-// ── Analyze button ────────────────────────────────────────────────────────────
 btnAnalyzeVoice.addEventListener('click', async () => {
     if (!voiceBlob) return;
-
     if (voiceBlob.size < 16000) {
         showToast("Recording too short. Please record at least 1 second of audio.");
         return;
@@ -486,7 +529,6 @@ let multimodalInterval  = null;
 let multimodalSeconds   = 0;
 let cameraStream        = null;
 
-// ── Camera preview (browser-side only — gives user visual feedback) ───────────
 async function startCameraPreview() {
     if (!cameraPreview) return;
     try {
@@ -494,8 +536,8 @@ async function startCameraPreview() {
             video: { width: 320, height: 240, facingMode: 'user' },
             audio: false,
         });
-        cameraPreview.srcObject = cameraStream;
-        cameraPreview.style.display = 'block';
+        cameraPreview.srcObject      = cameraStream;
+        cameraPreview.style.display  = 'block';
         if (cameraPlaceholder) cameraPlaceholder.style.display = 'none';
         cameraPreview.play();
         if (multimodalStatus)
@@ -514,18 +556,17 @@ function stopCameraPreview() {
         cameraStream = null;
     }
     if (cameraPreview) {
-        cameraPreview.srcObject = null;
+        cameraPreview.srcObject     = null;
         cameraPreview.style.display = 'none';
     }
     if (cameraPlaceholder) cameraPlaceholder.style.display = 'flex';
 }
 
-// ── Stop session ──────────────────────────────────────────────────────────────
 async function stopMultimodalSession() {
     if (!multimodalSessionId) return;
 
     const sessionToStop = multimodalSessionId;
-    multimodalSessionId = null;   // clear immediately to prevent double-stop
+    multimodalSessionId = null;
 
     clearInterval(multimodalInterval);
     multimodalInterval = null;
@@ -559,7 +600,6 @@ async function stopMultimodalSession() {
     }
 }
 
-// ── Start session ─────────────────────────────────────────────────────────────
 btnStartMultimodal.addEventListener('click', async () => {
     btnStartMultimodal.disabled = true;
     if (multimodalStatus) multimodalStatus.textContent = '🚀 Starting recording...';
@@ -608,18 +648,18 @@ btnStopMultimodal.addEventListener('click', stopMultimodalSession);
 // ============================================================================
 // Option 4: Live Stream (WebSocket)
 // ============================================================================
-let ws               = null;
-let streamMicStream  = null;
-let streamMicStopFn  = null;
+let ws              = null;
+let streamMicStream = null;
+let streamMicStopFn = null;
 
 function stopStreamMicMonitor() {
-    if (streamMicStopFn)  { streamMicStopFn(); streamMicStopFn = null; }
-    if (streamMicStream)  {
+    if (streamMicStopFn) { streamMicStopFn(); streamMicStopFn = null; }
+    if (streamMicStream) {
         streamMicStream.getTracks().forEach(t => t.stop());
         streamMicStream = null;
     }
-    if (streamMicLevel)   streamMicLevel.style.width = '0%';
-    if (micLevelWrapper)  micLevelWrapper.style.display = 'none';
+    if (streamMicLevel)  streamMicLevel.style.width = '0%';
+    if (micLevelWrapper) micLevelWrapper.style.display = 'none';
 }
 
 function disconnectWebSocket() {
@@ -637,7 +677,6 @@ btnConnectStream.addEventListener('click', async () => {
     streamStatusContainer.style.display = 'flex';
     streamStatusText.textContent = "Connecting...";
 
-    // Start mic level monitor so user sees audio activity
     try {
         streamMicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         if (streamMicLevel && micLevelWrapper) {
@@ -650,11 +689,11 @@ btnConnectStream.addEventListener('click', async () => {
         console.warn('Stream mic monitor unavailable:', e.message);
     }
 
-    const apiUrl  = new URL(API_BASE);
-    const wsProto = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-    // LS3: append current session_id to inherit conversation history
-    const sessionParam = currentSessionId ? `&session_id=${encodeURIComponent(currentSessionId)}` : '';
-    const wsUrl   = `${wsProto}//${apiUrl.host}/ws/stream?_=${Date.now()}${sessionParam}`;
+    const apiUrl      = new URL(API_BASE);
+    const wsProto     = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    const sessionParam = currentSessionId
+        ? `&session_id=${encodeURIComponent(currentSessionId)}` : '';
+    const wsUrl       = `${wsProto}//${apiUrl.host}/ws/stream?_=${Date.now()}${sessionParam}`;
 
     ws = new WebSocket(wsUrl);
 
@@ -668,18 +707,15 @@ btnConnectStream.addEventListener('click', async () => {
     ws.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data);
-            // LS1: server mic unavailable — show error and disconnect cleanly
             if (data.type === 'error') {
                 showToast(data.message || 'Streaming error occurred.', 'error');
                 disconnectWebSocket();
                 return;
             }
-            // Status / control messages
             if (data.type === 'status') {
                 streamStatusText.textContent = data.message || "Connected";
                 return;
             }
-            // Emotion payload
             if (data.session_id) {
                 renderResults(data);
                 streamStatusText.textContent = "✅ Result received — speak again...";
@@ -695,9 +731,7 @@ btnConnectStream.addEventListener('click', async () => {
         disconnectWebSocket();
     };
 
-    ws.onclose = () => {
-        disconnectWebSocket();
-    };
+    ws.onclose = () => { disconnectWebSocket(); };
 });
 
 btnDisconnectStream.addEventListener('click', disconnectWebSocket);
@@ -706,3 +740,4 @@ btnDisconnectStream.addEventListener('click', disconnectWebSocket);
 // Init
 // ============================================================================
 initTheme();
+detectServerMode();

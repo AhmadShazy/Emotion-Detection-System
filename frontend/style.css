@@ -377,3 +377,30 @@ textarea:focus { outline:none; border-color:var(--primary-color); }
     from { transform:translateX(100%); opacity:0; }
     to   { transform:translateX(0);    opacity:1; }
 }
+
+/* ── Disabled Tabs (Coming Soon) ────────────────────────── */
+.tab-btn.tab-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    position: relative;
+}
+
+.tab-btn.tab-disabled:hover {
+    background-color: transparent;
+    color: var(--text-secondary);
+}
+
+.coming-soon-badge {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.1rem 0.35rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    background-color: var(--primary-color);
+    color: white;
+    border-radius: 0.25rem;
+    vertical-align: middle;
+    opacity: 0.8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
