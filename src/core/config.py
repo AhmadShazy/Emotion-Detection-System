@@ -16,7 +16,11 @@ load_dotenv()
 TEXT_ONLY_MODE: bool = os.getenv("TEXT_ONLY_MODE", "false").lower() == "true"
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
-API_KEY: str = os.getenv("API_KEY", "")
+# Supports multiple API keys separated by commas in .env
+# To add a new teammate: add their key to API_KEYS in .env on the server
+# Example: API_KEYS=humanoid_ahmad_2024,humanoid_ali_2024,humanoid_sara_2024
+_raw_keys = os.getenv("API_KEYS", os.getenv("API_KEY", ""))
+API_KEYS: set = {k.strip() for k in _raw_keys.split(",") if k.strip()}
 
 # ── LLM Forwarding ────────────────────────────────────────────────────────────
 LLM_ENDPOINT_URL: str = os.getenv("LLM_ENDPOINT_URL", "")

@@ -7,6 +7,8 @@ TEXT_ONLY_MODE=true  → only /analyze/text + /health exposed
 TEXT_ONLY_MODE=false → all endpoints exposed
 
 Localhost requests bypass API key check for local development.
+Frontend static files (UI) are always public — no key needed.
+API endpoints require X-API-Key header.
 """
 
 import sys
@@ -24,7 +26,7 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from routers import text
-from src.core.config import TEXT_ONLY_MODE, API_KEY
+from src.core.config import TEXT_ONLY_MODE, API_KEYS
 
 # ── Conditionally import disabled routers ─────────────────────────────────────
 if not TEXT_ONLY_MODE:
@@ -35,17 +37,22 @@ if not TEXT_ONLY_MODE:
 # API Key Middleware
 # ════════════════════════════════════════════════════════════════════════════
 
-# Hosts that bypass API key check — controlled by ALLOW_LOCALHOST in .env
 from src.core.config import ALLOW_LOCALHOST
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"} if ALLOW_LOCALHOST else set()
 
+
 class APIKeyMiddleware:
     """
-    Checks X-API-Key header on every request.
+    Checks X-API-Key header on API endpoints.
 
-    Skips check for:
+    Always PUBLIC (no key needed):
       - /health, /docs, /redoc, /openapi.json  (monitoring + docs)
-      - requests from localhost / 127.0.0.1    (local dev access)
+      - Frontend static files (/, *.html, *.css, *.js, *.ico etc.)
+      - Requests from localhost / 127.0.0.1 (local dev)
+
+    Always PROTECTED (key required):
+      - /analyze/*   (text, voice, multimodal)
+      - /ws/stream   (websocket)
     """
     def __init__(self, app):
         self.app = app
@@ -56,15 +63,29 @@ class APIKeyMiddleware:
             path    = request.url.path
             host    = request.url.hostname or ""
 
-            # Always public — monitoring and docs
+            # ── Always public — monitoring and docs ───────────────────────────
             open_paths = ["/health", "/docs", "/redoc", "/openapi.json"]
 
-            # Local development — skip key check
+            # ── Always public — frontend static files ─────────────────────────
+            # Covers: /, /index.html, /app.js, /style.css, /favicon.ico etc.
+            last_segment = path.split("/")[-1]
+            is_static_file = (
+                path == "/"
+                or path.startswith("/static")
+                or ("." in last_segment and not path.startswith("/analyze"))
+            )
+
+            # ── Local development — skip key check ────────────────────────────
             is_local = host in _LOCAL_HOSTS
 
-            if not any(path.startswith(p) for p in open_paths) and not is_local:
+            # ── Apply key check only to API endpoints ─────────────────────────
+            if (
+                not any(path.startswith(p) for p in open_paths)
+                and not is_static_file
+                and not is_local
+            ):
                 key = request.headers.get("X-API-Key", "")
-                if API_KEY and key != API_KEY:
+                if API_KEYS and key not in API_KEYS:
                     response = JSONResponse(
                         {"detail": "Invalid or missing API Key."},
                         status_code=403,
@@ -83,6 +104,7 @@ class APIKeyMiddleware:
 async def lifespan(app: FastAPI):
     print("\n[STARTUP] Humanoid Assistant API initialising...")
     print(f"[STARTUP] Mode: {'TEXT ONLY' if TEXT_ONLY_MODE else 'FULL'}")
+    print(f"[STARTUP] API Keys loaded: {len(API_KEYS)}")
 
     for sub in ("data/recordings", "data/processed"):
         os.makedirs(os.path.join(PROJECT_ROOT, sub), exist_ok=True)
