@@ -13,6 +13,35 @@
 </head>
 
 <body>
+
+<!-- ── API Key Gate Overlay ────────────────────────────────────────────── -->
+<div id="api-gate" class="api-gate-overlay">
+    <div class="api-gate-card">
+        <div class="api-gate-logo">
+            <span>🤖</span>
+            <h1>Humanoid Assistant</h1>
+        </div>
+        <p class="api-gate-subtitle">Enter your API key to continue</p>
+        <div class="api-gate-input-wrapper">
+            <input
+                type="password"
+                id="api-key-input"
+                class="api-gate-input"
+                placeholder="Enter your API key..."
+                autocomplete="off"
+            />
+            <button id="api-gate-toggle" class="api-gate-toggle" title="Show/Hide key">👁</button>
+        </div>
+        <p id="api-gate-error" class="api-gate-error" style="display:none;">
+            ❌ Invalid API key. Please try again.
+        </p>
+        <button id="api-gate-submit" class="api-gate-btn">
+            Access System
+        </button>
+        <p class="api-gate-hint">Contact the project owner to get your API key.</p>
+    </div>
+</div>
+
     <header>
         <div class="logo">
             <span class="logo-icon">🤖</span>
@@ -65,7 +94,6 @@
                                 <span id="record-status" class="status-text">Ready</span>
                             </div>
 
-                            <!-- Live waveform visualizer (bars populated by JS) -->
                             <div id="voice-waveform" class="voice-waveform"></div>
 
                             <div class="divider">OR</div>
@@ -101,7 +129,6 @@
                             </p>
                         </div>
 
-                        <!-- Browser camera preview (user feedback only) -->
                         <div class="camera-preview-wrapper">
                             <video id="camera-preview"
                                    class="camera-preview"
@@ -142,7 +169,6 @@
                             Speak naturally; results appear after each sentence.
                         </p>
 
-                        <!-- Mic level indicator -->
                         <div class="mic-level-wrapper" id="mic-level-wrapper"
                              style="display:none;">
                             <span class="mic-icon">🎙️</span>

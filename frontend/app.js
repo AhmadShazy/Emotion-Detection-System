@@ -1,15 +1,95 @@
 // ============================================================================
-// Mode Detection — called on startup
-// Fetches /health to determine which features are available
-// and dynamically shows/hides tabs accordingly
+// API Key Gate — validates key against server before showing the UI
+// Key stored in sessionStorage (cleared on browser close)
+// Never hardcoded — user enters it manually
 // ============================================================================
 const API_BASE = `${window.location.protocol}//${window.location.host}`;
+let SESSION_API_KEY = sessionStorage.getItem('humanoid_api_key') || '';
 
+// ── Gate elements ─────────────────────────────────────────────────────────────
+const apiGate       = document.getElementById('api-gate');
+const apiKeyInput   = document.getElementById('api-key-input');
+const apiGateSubmit = document.getElementById('api-gate-submit');
+const apiGateError  = document.getElementById('api-gate-error');
+const apiGateToggle = document.getElementById('api-gate-toggle');
+
+// ── Show/hide password toggle ─────────────────────────────────────────────────
+apiGateToggle.addEventListener('click', () => {
+    const isPassword = apiKeyInput.type === 'password';
+    apiKeyInput.type = isPassword ? 'text' : 'password';
+    apiGateToggle.textContent = isPassword ? '🙈' : '👁';
+});
+
+// ── Submit on Enter key ───────────────────────────────────────────────────────
+apiKeyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') apiGateSubmit.click();
+});
+
+// ── Validate key against server ───────────────────────────────────────────────
+async function validateAndUnlock(key) {
+    apiGateSubmit.disabled = true;
+    apiGateSubmit.classList.add('loading');
+    apiGateSubmit.textContent = 'Verifying...';
+    apiGateError.style.display = 'none';
+
+    try {
+        const res = await fetch(`${API_BASE}/analyze/text`, {
+            method:  'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': key,
+            },
+            body: JSON.stringify({ text: 'ping' }),
+        });
+
+        if (res.status === 403) {
+            apiGateError.textContent = '❌ Invalid API key. Please try again.';
+            apiGateError.style.display = 'block';
+            apiGateSubmit.disabled = false;
+            apiGateSubmit.classList.remove('loading');
+            apiGateSubmit.textContent = 'Access System';
+            sessionStorage.removeItem('humanoid_api_key');
+            return;
+        }
+
+        // Key valid — store and unlock
+        SESSION_API_KEY = key;
+        sessionStorage.setItem('humanoid_api_key', key);
+        apiGate.style.display = 'none';
+
+    } catch (err) {
+        apiGateError.textContent = '⚠️ Could not reach server. Try again.';
+        apiGateError.style.display = 'block';
+        apiGateSubmit.disabled = false;
+        apiGateSubmit.classList.remove('loading');
+        apiGateSubmit.textContent = 'Access System';
+    }
+}
+
+apiGateSubmit.addEventListener('click', () => {
+    const key = apiKeyInput.value.trim();
+    if (!key) {
+        apiGateError.textContent = '❌ Please enter your API key.';
+        apiGateError.style.display = 'block';
+        return;
+    }
+    validateAndUnlock(key);
+});
+
+// ── Auto-unlock if valid key already in sessionStorage ────────────────────────
+if (SESSION_API_KEY) {
+    validateAndUnlock(SESSION_API_KEY);
+} else {
+    apiGate.style.display = 'flex';
+}
+
+// ============================================================================
+// Mode Detection — called on startup
+// ============================================================================
 let currentTab       = 'text';
 let currentSessionId = null;
-let availableMode    = 'text_only'; // default safe assumption
+let availableMode    = 'text_only';
 
-// ── Fetch mode from server ────────────────────────────────────────────────────
 async function detectServerMode() {
     try {
         const res  = await fetch(`${API_BASE}/health`);
@@ -22,13 +102,11 @@ async function detectServerMode() {
     applyModeToUI();
 }
 
-// ── Apply mode to tabs ────────────────────────────────────────────────────────
 function applyModeToUI() {
     const modeMap = {
         'text_only': ['text'],
         'full':      ['text', 'voice', 'multimodal', 'stream'],
     };
-
     const enabledTabs = modeMap[availableMode] || ['text'];
 
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -37,8 +115,6 @@ function applyModeToUI() {
             btn.classList.add('tab-disabled');
             btn.setAttribute('disabled', true);
             btn.setAttribute('title', 'Coming Soon');
-
-            // Add coming soon badge
             if (!btn.querySelector('.coming-soon-badge')) {
                 const badge = document.createElement('span');
                 badge.className = 'coming-soon-badge';
@@ -52,19 +128,16 @@ function applyModeToUI() {
         }
     });
 
-    // If current tab got disabled, switch to text
     if (!enabledTabs.includes(currentTab)) {
         switchTab('text');
     }
 }
 
-// ── Tab switching ─────────────────────────────────────────────────────────────
 function switchTab(tabName) {
     if (ws) disconnectWebSocket();
     if (typeof multimodalSessionId !== 'undefined' && multimodalSessionId) {
         stopMultimodalSession();
     }
-
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
 
@@ -191,7 +264,6 @@ function getEmotionColor(emotion) {
 
 function renderResults(payload) {
     if (!payload) return;
-
     if (payload.session_id) currentSessionId = payload.session_id;
 
     const { user_input, emotion_analysis, tone_analysis } = payload;
@@ -301,7 +373,7 @@ function createMicLevelMonitor(stream, onLevel) {
     function tick() {
         if (!running) return;
         analyser.getByteFrequencyData(data);
-        const avg = data.reduce((a, b) => a + b, 0) / data.length;
+        const avg = data.reduce((a, b) => a + b,0) / data.length;
         onLevel(Math.min(100, Math.round(avg * 2)));
         requestAnimationFrame(tick);
     }
@@ -326,8 +398,11 @@ btnAnalyzeText.addEventListener('click', async () => {
     try {
         const res = await fetch(`${API_BASE}/analyze/text`, {
             method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ text }),
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': SESSION_API_KEY,
+            },
+            body: JSON.stringify({ text }),
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
@@ -503,6 +578,7 @@ btnAnalyzeVoice.addEventListener('click', async () => {
     try {
         const res = await fetch(`${API_BASE}/analyze/voice`, {
             method: 'POST',
+            headers: { 'X-API-Key': SESSION_API_KEY },
             body:   formData,
         });
         if (!res.ok) {
@@ -583,8 +659,11 @@ async function stopMultimodalSession() {
     try {
         const res = await fetch(`${API_BASE}/analyze/multimodal/stop`, {
             method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ session_id: sessionToStop }),
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': SESSION_API_KEY,
+            },
+            body: JSON.stringify({ session_id: sessionToStop }),
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
@@ -607,8 +686,11 @@ btnStartMultimodal.addEventListener('click', async () => {
     try {
         const res = await fetch(`${API_BASE}/analyze/multimodal/start`, {
             method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({}),
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': SESSION_API_KEY,
+            },
+            body: JSON.stringify({}),
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
