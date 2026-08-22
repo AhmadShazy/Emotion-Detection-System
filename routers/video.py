@@ -41,8 +41,11 @@ router = APIRouter()
 # created with mkdtemp so two concurrent uploads can never collide.
 JOBS_ROOT = os.path.join(PROJECT_ROOT, "data", "jobs")
 
-# 64 MB. Roughly 30 seconds of 720p from a phone, with headroom.
-MAX_UPLOAD_BYTES = 64 * 1024 * 1024
+# 200 MB. A 30-second 1080p or 4K clip straight off a phone can easily exceed
+# 64 MB, and the upload is streamed to disk rather than held in memory, so the
+# cap only needs to bound disk use. The server trims to MAX_VIDEO_SECONDS when
+# decoding regardless of how long the upload is.
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 # Read the upload in chunks so an oversized file is rejected without ever being
 # held in memory.
@@ -119,12 +122,22 @@ async def analyze_video(
     # Created BEFORE the try, so the finally can never reference an unbound
     # name — the same shape routers/voice.py uses for its temp WAV.
     job_dir = tempfile.mkdtemp(prefix="video_", dir=JOBS_ROOT)
-    upload_path = os.path.join(job_dir, "upload.bin")
+
+    # Keep the original extension. ffprobe identifies formats by content, but
+    # for a few containers the extension is a useful tiebreaker — and saving
+    # everything as ".bin" throws that hint away for no benefit.
+    suffix = os.path.splitext(filename)[1]
+    if suffix not in _ALLOWED_SUFFIXES:
+        suffix = ".bin"
+    upload_path = os.path.join(job_dir, f"upload{suffix}")
 
     try:
         size = await _save_upload(file, upload_path)
         if size == 0:
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+        print(f"[Video] Received {size / 1e6:.1f} MB "
+              f"(type={file.content_type!r} name={file.filename!r})")
 
         # ── Split into audio + frames (blocking, so off the event loop) ──────
         try:

@@ -74,23 +74,48 @@ def probe_streams(path: str) -> dict:
     fail here cleanly rather than deeper in the pipeline. Never branch on the
     filename or the browser's Content-Type — both are hints, not evidence.
 
-    Returns {"video": bool, "audio": bool}.
+    Returns {"video": bool, "audio": bool, "kinds": [...], "detail": str}.
     """
+    # Generous probe limits. The defaults (5 MB / 5 s) can miss the video stream
+    # in a long recording from a phone, in a fragmented MP4, or in a MOV whose
+    # index sits at the end of the file — ffprobe then exits 0 having found
+    # nothing, which looks identical to "this has no video".
     result = _run([
         "ffprobe", "-v", "error",
-        "-show_entries", "stream=codec_type",
+        "-probesize", "100M",
+        "-analyzeduration", "100M",
+        "-show_entries", "stream=codec_type,codec_name",
         "-of", "csv=p=0",
         path,
-    ], timeout=30)
+    ], timeout=60)
 
     if result.returncode != 0:
         raise VideoIngestError(
-            "Could not read this file as video. It may be corrupt, empty, or "
-            "not a video at all."
+            f"Could not read this file as video. It may be corrupt, empty, or "
+            f"not a video at all. ffprobe: {result.stderr.strip()[:200]}"
         )
 
-    kinds = {line.strip() for line in result.stdout.splitlines() if line.strip()}
-    return {"video": "video" in kinds, "audio": "audio" in kinds}
+    kinds, described = set(), []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Fields come back as "codec_name,codec_type" — order follows the file,
+        # so identify the type by matching rather than by position.
+        parts = [p.strip() for p in line.split(",") if p.strip()]
+        for kind in ("video", "audio", "subtitle", "data", "attachment"):
+            if kind in parts:
+                kinds.add(kind)
+                other = [p for p in parts if p != kind]
+                described.append(f"{kind} ({other[0]})" if other else kind)
+                break
+
+    return {
+        "video":  "video" in kinds,
+        "audio":  "audio" in kinds,
+        "kinds":  sorted(kinds),
+        "detail": ", ".join(described) if described else "no streams at all",
+    }
 
 
 def extract(path: str, job_dir: str) -> dict:
@@ -107,9 +132,14 @@ def extract(path: str, job_dir: str) -> dict:
     streams = probe_streams(path)
 
     if not streams["video"]:
+        # Say what WAS found. "No video track" on a file the user knows is a
+        # video is baffling on its own, and the detail is what makes it
+        # diagnosable.
         raise VideoIngestError(
-            "That file has no video track. Use the Voice tab for audio-only "
-            "recordings."
+            f"No video track could be read from that file. "
+            f"What was found: {streams['detail']}. "
+            f"If this really is a video, the file may be partially uploaded or "
+            f"in a container this server cannot read."
         )
 
     frames_dir = os.path.join(job_dir, "frames")
