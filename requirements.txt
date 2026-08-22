@@ -14,8 +14,13 @@ numpy
 scipy
 soundfile
 
-# Data Processing (for OpenFace results)
+# Data Processing
 pandas
+
+# Facial expression analysis.
+# MUST be pinned >=1.0.1: version 0.10.x pins numpy<2 and protobuf<5, which
+# would force a downgrade that breaks torch, numba and onnxruntime.
+mediapipe>=1.0.1
 
 # Utilities
 requests

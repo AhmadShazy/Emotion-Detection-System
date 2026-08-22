@@ -1,8 +1,15 @@
+"""
+src/interactive_modes.py
+========================
+Analysis steps shared by the API routes.
+
+Everything here works on a FILE that arrived from a client. Nothing captures
+from a microphone or a camera — the server owns no capture devices, which is
+what lets many people use it at once.
+"""
+
 import sys
 import os
-import time
-import datetime
-import threading
 import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,18 +27,6 @@ try:
 except ImportError:
     def analyze_text_emotion(text, threshold=0.1): return []
     def load_emotion_model(): return None
-
-try:
-    from src.faceexpression.classifier import analyze_openface_csv
-except ImportError:
-    def analyze_openface_csv(csv_path): return None
-
-try:
-    import sounddevice as sd
-    from scipy.io.wavfile import write as wav_write
-except ImportError:
-    sd        = None
-    wav_write = None
 
 from src.streaming.unified_pipeline import build_text_state
 
@@ -182,46 +177,3 @@ def process_voice_pipeline(wav_path: str):
               f"conf={ser_confidence:.3f}, reliability={reliability:.3f}")
 
     return text_state, voice_state, stt_result, ser_result
-
-
-def process_multimodal_data(
-    wav_path:       str,
-    csv_path:       str,
-    face_available: bool = True,
-):
-    """
-    Processes audio and face tracking data together.
-    Uses the same hallucination-filtered voice pipeline.
-
-    Returns:
-        tuple: (text_state, voice_state, face_state,
-                stt_result, ser_result, face_timeline)
-    """
-    text_state  = None
-    voice_state = None
-    stt_result  = "N/A"
-    ser_result  = "N/A"
-
-    if wav_path and os.path.exists(wav_path):
-        text_state, voice_state, stt_result, ser_result = (
-            process_voice_pipeline(wav_path)
-        )
-
-    face_timeline = "N/A"
-    face_state    = None
-
-    if face_available:
-        time.sleep(1)   # short buffer for OpenFace to flush CSV
-        if csv_path and os.path.exists(csv_path):
-            result = analyze_openface_csv(csv_path)
-            if result:
-                face_timeline, face_state = result
-                if not face_timeline:
-                    face_timeline = "No valid face frames detected."
-        else:
-            face_timeline = "CSV not generated."
-
-    return (
-        text_state, voice_state, face_state,
-        stt_result, ser_result, face_timeline,
-    )

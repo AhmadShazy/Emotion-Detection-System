@@ -160,6 +160,35 @@ def download_speechbrain():
         raise RuntimeError(f"SpeechBrain download failed: {e}") from e
 
 
+# ── 5. MediaPipe face landmarker ─────────────────────────────────────────────
+
+MEDIAPIPE_CACHE = os.path.join(PROJECT_ROOT, "external", "mediapipe")
+MEDIAPIPE_MODEL = os.path.join(MEDIAPIPE_CACHE, "face_landmarker.task")
+MEDIAPIPE_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/1/face_landmarker.task"
+)
+
+
+def download_mediapipe_face():
+    _header("5 / 5 — MediaPipe face landmarker (~4 MB)")
+
+    # Not a pip dependency — the mediapipe package ships the runtime, but the
+    # model bundle is a separate download.
+    import urllib.request
+
+    os.makedirs(MEDIAPIPE_CACHE, exist_ok=True)
+
+    if os.path.isfile(MEDIAPIPE_MODEL):
+        _ok(f"Already present at {MEDIAPIPE_MODEL}")
+        return
+
+    _info(f"Downloading to {MEDIAPIPE_CACHE} ...")
+    urllib.request.urlretrieve(MEDIAPIPE_URL, MEDIAPIPE_MODEL)
+    _ok(f"MediaPipe face landmarker cached "
+        f"({os.path.getsize(MEDIAPIPE_MODEL) / 1e6:.1f} MB)")
+
+
 # ── Verification ──────────────────────────────────────────────────────────────
 
 def verify():
@@ -217,6 +246,7 @@ if __name__ == "__main__":
         ("Whisper",        download_whisper),
         ("faster-whisper", download_faster_whisper),
         ("SpeechBrain",    download_speechbrain),
+        ("MediaPipe face", download_mediapipe_face),
     ]
 
     failed = []

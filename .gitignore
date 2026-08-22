@@ -12,6 +12,7 @@ external/openface/
 wav2vec2_checkpoints/
 external/speechbrain/
 external/faster_whisper/
+external/mediapipe/
 
 # IDE & Editor
 .vscode/

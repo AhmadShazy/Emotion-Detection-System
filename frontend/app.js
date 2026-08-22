@@ -135,8 +135,10 @@ function applyModeToUI() {
 
 function switchTab(tabName) {
     if (ws) disconnectWebSocket();
-    if (typeof multimodalSessionId !== 'undefined' && multimodalSessionId) {
-        stopMultimodalSession();
+    // Leaving the tab mid-recording must release the camera and microphone,
+    // or the device stays lit and held after the user has moved on.
+    if (typeof isRecordingVideo !== 'undefined' && isRecordingVideo) {
+        stopVideoRecording();
     }
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
@@ -174,8 +176,10 @@ const voiceFile           = document.getElementById('voice-file');
 const fileNameDisplay     = document.getElementById('file-name');
 const btnAnalyzeVoice     = document.getElementById('btn-analyze-voice');
 const voiceWaveform       = document.getElementById('voice-waveform');
-const btnStartMultimodal  = document.getElementById('btn-start-multimodal');
-const btnStopMultimodal   = document.getElementById('btn-stop-multimodal');
+const btnRecordVideo      = document.getElementById('btn-record-video');
+const videoFile           = document.getElementById('video-file');
+const videoFileName       = document.getElementById('video-file-name');
+const btnAnalyzeVideo     = document.getElementById('btn-analyze-video');
 const multimodalTimer     = document.getElementById('multimodal-timer');
 const timerDisplay        = document.getElementById('timer-display');
 const cameraPreview       = document.getElementById('camera-preview');
@@ -211,8 +215,8 @@ tabBtns.forEach(btn => {
         if (btn.hasAttribute('disabled')) return;
         const tab = btn.getAttribute('data-tab');
         if (ws) disconnectWebSocket();
-        if (typeof multimodalSessionId !== 'undefined' && multimodalSessionId) {
-            stopMultimodalSession();
+        if (typeof isRecordingVideo !== 'undefined' && isRecordingVideo) {
+            stopVideoRecording();
         }
         stopCameraPreview();
         stopVoiceVisualization();
@@ -604,38 +608,44 @@ btnAnalyzeVoice.addEventListener('click', async () => {
 });
 
 // ============================================================================
-// Option 3: Multimodal Session
+// Option 3: Video Analysis
 // ============================================================================
-let multimodalSessionId = null;
-let multimodalInterval  = null;
-let multimodalSeconds   = 0;
-let cameraStream        = null;
+// The browser captures the video and uploads it. Previously the SERVER opened
+// its own webcam and this tab only showed a decorative preview — which meant
+// only one person, sitting at the server, could ever use it.
+let videoBlob        = null;
+let videoRecorder    = null;
+let videoStream      = null;
+let videoChunks      = [];
+let isRecordingVideo = false;
+let videoInterval    = null;
+let videoSeconds     = 0;
 
-async function startCameraPreview() {
-    if (!cameraPreview) return;
-    try {
-        cameraStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: 320, height: 240, facingMode: 'user' },
-            audio: false,
-        });
-        cameraPreview.srcObject      = cameraStream;
-        cameraPreview.style.display  = 'block';
-        if (cameraPlaceholder) cameraPlaceholder.style.display = 'none';
-        cameraPreview.play();
-        if (multimodalStatus)
-            multimodalStatus.textContent = '📷 Camera active — server is recording';
-    } catch (err) {
-        console.warn('Camera preview unavailable:', err.message);
-        if (multimodalStatus)
-            multimodalStatus.textContent =
-                '⚠️ Camera preview unavailable (server records independently)';
+const MAX_VIDEO_SECONDS = 30;
+
+// Formats vary by browser: Chrome and Firefox produce WebM, Safari below 18.4
+// produces MP4 only. Pick whichever this browser actually supports.
+function pickVideoMimeType() {
+    const candidates = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
+        'video/mp4',
+    ];
+    for (const type of candidates) {
+        if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return type;
     }
+    return null;
+}
+
+function setVideoStatus(text) {
+    if (multimodalStatus) multimodalStatus.textContent = text;
 }
 
 function stopCameraPreview() {
-    if (cameraStream) {
-        cameraStream.getTracks().forEach(t => t.stop());
-        cameraStream = null;
+    if (videoStream) {
+        videoStream.getTracks().forEach(t => t.stop());
+        videoStream = null;
     }
     if (cameraPreview) {
         cameraPreview.srcObject     = null;
@@ -644,94 +654,157 @@ function stopCameraPreview() {
     if (cameraPlaceholder) cameraPlaceholder.style.display = 'flex';
 }
 
-async function stopMultimodalSession() {
-    if (!multimodalSessionId) return;
-
-    const sessionToStop = multimodalSessionId;
-    multimodalSessionId = null;
-
-    clearInterval(multimodalInterval);
-    multimodalInterval = null;
-
-    btnStartMultimodal.style.display = 'inline-block';
-    btnStartMultimodal.disabled      = false;
-    btnStopMultimodal.style.display  = 'none';
-    multimodalTimer.style.display    = 'none';
+function resetVideoRecordingUI() {
+    isRecordingVideo = false;
+    clearInterval(videoInterval);
+    videoInterval = null;
+    if (multimodalTimer) multimodalTimer.style.display = 'none';
+    if (btnRecordVideo) {
+        btnRecordVideo.classList.remove('recording');
+        btnRecordVideo.innerHTML = '<span class="record-icon">⏺</span> Record Video';
+    }
     stopCameraPreview();
+}
 
-    if (multimodalStatus) multimodalStatus.textContent = '⏳ Processing recording...';
-    showLoading(true, 'Processing multimodal recording...');
+async function startVideoRecording() {
+    const mimeType = pickVideoMimeType();
+    if (!mimeType) {
+        showToast('This browser cannot record video. Choose a file instead.');
+        return;
+    }
 
     try {
-        const res = await fetch(`${API_BASE}/analyze/multimodal/stop`, {
-            method:  'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-Key': SESSION_API_KEY,
-            },
-            body: JSON.stringify({ session_id: sessionToStop }),
+        // audio: true is the whole difference from the old preview-only code —
+        // without it there is no voice to analyse.
+        videoStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: 640, height: 480, facingMode: 'user' },
+            audio: true,
         });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || `HTTP ${res.status}`);
-        }
-        if (multimodalStatus) multimodalStatus.textContent = '✅ Analysis complete';
-        renderResults(await res.json());
     } catch (err) {
-        if (multimodalStatus) multimodalStatus.textContent = `❌ ${err.message}`;
-        showToast(err.message);
-    } finally {
-        showLoading(false);
+        showToast('Camera or microphone access was denied.');
+        return;
+    }
+
+    if (cameraPreview) {
+        cameraPreview.srcObject     = videoStream;
+        cameraPreview.style.display = 'block';
+        if (cameraPlaceholder) cameraPlaceholder.style.display = 'none';
+        cameraPreview.play();
+    }
+
+    videoChunks   = [];
+    videoRecorder = new MediaRecorder(videoStream, { mimeType });
+
+    videoRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) videoChunks.push(e.data);
+    };
+
+    videoRecorder.onstop = () => {
+        videoBlob = new Blob(videoChunks, { type: mimeType });
+        resetVideoRecordingUI();
+
+        if (videoBlob.size < 1024) {
+            showToast('That recording was too short. Try again.');
+            videoBlob = null;
+            setVideoStatus('Ready');
+            return;
+        }
+
+        const kb = Math.round(videoBlob.size / 1024);
+        setVideoStatus(`✅ Recorded ${kb} KB — click Analyze Video`);
+        if (videoFileName) videoFileName.textContent = 'browser_recording';
+        if (btnAnalyzeVideo) btnAnalyzeVideo.disabled = false;
+        if (videoFile) videoFile.value = '';
+    };
+
+    videoRecorder.start();
+    isRecordingVideo = true;
+
+    btnRecordVideo.classList.add('recording');
+    btnRecordVideo.innerHTML = '<span class="record-icon">⏹</span> Stop Recording';
+    setVideoStatus('🔴 Recording — speak and look at the camera');
+    if (btnAnalyzeVideo) btnAnalyzeVideo.disabled = true;
+
+    videoSeconds = 0;
+    if (multimodalTimer) multimodalTimer.style.display = 'flex';
+    if (timerDisplay) timerDisplay.textContent = '00:00';
+
+    videoInterval = setInterval(() => {
+        videoSeconds++;
+        const mm = String(Math.floor(videoSeconds / 60)).padStart(2, '0');
+        const ss = String(videoSeconds % 60).padStart(2, '0');
+        if (timerDisplay) timerDisplay.textContent = `${mm}:${ss}`;
+        // The server analyses only the first 30 seconds, so stop there rather
+        // than uploading footage that will be discarded.
+        if (videoSeconds >= MAX_VIDEO_SECONDS) stopVideoRecording();
+    }, 1000);
+}
+
+function stopVideoRecording() {
+    if (videoRecorder && videoRecorder.state !== 'inactive') {
+        videoRecorder.stop();   // onstop assembles the blob
+    } else {
+        resetVideoRecordingUI();
     }
 }
 
-btnStartMultimodal.addEventListener('click', async () => {
-    btnStartMultimodal.disabled = true;
-    if (multimodalStatus) multimodalStatus.textContent = '🚀 Starting recording...';
+if (btnRecordVideo) {
+    btnRecordVideo.addEventListener('click', () => {
+        if (isRecordingVideo) stopVideoRecording();
+        else                  startVideoRecording();
+    });
+}
 
-    try {
-        const res = await fetch(`${API_BASE}/analyze/multimodal/start`, {
-            method:  'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-Key': SESSION_API_KEY,
-            },
-            body: JSON.stringify({}),
-        });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || `HTTP ${res.status}`);
+if (videoFile) {
+    videoFile.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        videoBlob = file;
+        if (videoFileName) videoFileName.textContent = file.name;
+        setVideoStatus('File selected — ready to analyze');
+        if (btnAnalyzeVideo) btnAnalyzeVideo.disabled = false;
+    });
+}
+
+if (btnAnalyzeVideo) {
+    btnAnalyzeVideo.addEventListener('click', async () => {
+        if (!videoBlob) return;
+
+        setVideoStatus('📤 Uploading and analysing — this takes a few seconds...');
+        showLoading(true, 'Analysing video — face, voice and words...');
+        btnAnalyzeVideo.disabled = true;
+        if (btnRecordVideo) btnRecordVideo.disabled = true;
+
+        const fd = new FormData();
+        const name = (videoFileName && videoFileName.textContent !== 'No file chosen')
+            ? videoFileName.textContent : 'recording.webm';
+        fd.append('file', videoBlob, name);
+        // Keeps the server's emotion memory alive across turns.
+        if (currentSessionId) fd.append('session_id', currentSessionId);
+
+        try {
+            // No Content-Type header — the browser sets the multipart boundary.
+            const res = await fetch(`${API_BASE}/analyze/video`, {
+                method:  'POST',
+                headers: { 'X-API-Key': SESSION_API_KEY },
+                body:    fd,
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+            setVideoStatus('✅ Analysis complete');
+            renderResults(await res.json());
+        } catch (err) {
+            setVideoStatus('❌ Analysis failed');
+            showToast(err.message);
+        } finally {
+            showLoading(false);
+            btnAnalyzeVideo.disabled = false;
+            if (btnRecordVideo) btnRecordVideo.disabled = false;
         }
-
-        const data          = await res.json();
-        multimodalSessionId = data.session_id;
-
-        await startCameraPreview();
-
-        btnStartMultimodal.style.display = 'none';
-        btnStopMultimodal.style.display  = 'inline-block';
-        multimodalTimer.style.display    = 'flex';
-
-        multimodalSeconds        = 0;
-        timerDisplay.textContent = "00:00";
-
-        multimodalInterval = setInterval(() => {
-            multimodalSeconds++;
-            const mm = String(Math.floor(multimodalSeconds / 60)).padStart(2, '0');
-            const ss = String(multimodalSeconds % 60).padStart(2, '0');
-            timerDisplay.textContent = `${mm}:${ss}`;
-            if (multimodalSeconds >= 30) stopMultimodalSession();
-        }, 1000);
-
-    } catch (err) {
-        btnStartMultimodal.disabled      = false;
-        btnStartMultimodal.style.display = 'inline-block';
-        if (multimodalStatus) multimodalStatus.textContent = `❌ ${err.message}`;
-        showToast(err.message);
-    }
-});
-
-btnStopMultimodal.addEventListener('click', stopMultimodalSession);
+    });
+}
 
 // ============================================================================
 // Option 4: Live Stream (WebSocket)

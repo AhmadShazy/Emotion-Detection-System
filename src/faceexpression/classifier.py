@@ -78,105 +78,17 @@ def smooth_emotions(emotions, window=10):
 
 # ── Main Analysis Function ────────────────────────────────────────────────────
 
-def analyze_openface_csv(csv_path):
-    """
-    Reads an OpenFace CSV, filters valid frames, classifies emotions,
-    applies temporal smoothing, saves per-frame and timeline outputs,
-    and returns (timeline_str, face_state).
 
-    Returns:
-        (str, dict | None)  — timeline string and face_state dict,
-                               or ("error message", None) on failure.
-    """
-    print(f"📂 Analyzing: {csv_path}")
-
-    # ── Load CSV ──────────────────────────────────────────────────────────────
-    try:
-        df = pd.read_csv(csv_path)
-    except FileNotFoundError:
-        print(f"❌ Error: File not found at {csv_path}")
-        return "File not found.", None
-    except Exception as e:
-        print(f"❌ Error reading CSV: {e}")
-        return f"CSV read error: {e}", None
-
-    # Strip whitespace from column names (OpenFace adds leading spaces)
-    df.columns = df.columns.str.strip()
-
-    # ── Filter Valid Frames ───────────────────────────────────────────────────
-    df = df[(df["success"] == 1) & (df["confidence"] > 0.8)].reset_index(drop=True)
-
-    if df.empty:
-        print("⚠️  No valid frames found after filtering (confidence < 0.8)")
-        return "No valid face frames detected.", None
-
-    # ── Classify + Smooth ─────────────────────────────────────────────────────
-    df["emotion"]        = df.apply(classify_emotion, axis=1)
-    df["smooth_emotion"] = smooth_emotions(df["emotion"].tolist(), window=10)
-
-    # ── Save Frame-Level Output ───────────────────────────────────────────────
-    analysis_dir = os.path.join(PROJECT_ROOT, "data", "analysis")
-    os.makedirs(analysis_dir, exist_ok=True)
-
-    output_csv = os.path.join(analysis_dir, "frame_level_emotions.csv")
-    df[["timestamp", "emotion", "smooth_emotion"]].to_csv(output_csv, index=False)
-    print(f"📄 Saved frame-level data: {output_csv}")
-
-    # ── Build Timeline ────────────────────────────────────────────────────────
-    segments = []
-    current_emotion = df.loc[0, "smooth_emotion"]
-    start_time      = df.loc[0, "timestamp"]
-
-    for i in range(1, len(df)):
-        if df.loc[i, "smooth_emotion"] != current_emotion:
-            segments.append((start_time, df.loc[i - 1, "timestamp"], current_emotion))
-            current_emotion = df.loc[i, "smooth_emotion"]
-            start_time      = df.loc[i, "timestamp"]
-
-    segments.append((start_time, df.loc[len(df) - 1, "timestamp"], current_emotion))
-
-    # ── Save Timeline ─────────────────────────────────────────────────────────
-    final_output_path = os.path.join(analysis_dir, "final_emotions.txt")
-    timeline_str = ""
-    with open(final_output_path, "w") as f:
-        for start, end, emo in segments:
-            line = f"{start:.2f}s – {end:.2f}s : {emo}\n"
-            f.write(line)
-            timeline_str += line
-
-    print(f"✅ Emotion extraction completed. Saved to {final_output_path}")
-
-    # ── Build face_state for Unified Pipeline ─────────────────────────────────
-    face_state = None
-    overall_counts = df["smooth_emotion"].value_counts(normalize=True)
-
-    if not overall_counts.empty:
-        dominant_emotion = overall_counts.index[0]
-        confidence       = float(overall_counts.iloc[0])
-
-        # Instability = fraction of frames where emotion changed vs previous frame
-        emotions_list = df["emotion"].tolist()
-        transitions   = sum(
-            1 for i in range(1, len(emotions_list))
-            if emotions_list[i] != emotions_list[i - 1]
-        )
-        instability = transitions / len(emotions_list) if len(emotions_list) > 1 else 0.0
-
-        face_state = {
-            "source":      "face",
-            "emotion":     dominant_emotion,
-            "confidence":  confidence,
-            "reliability": 1.0,
-            "instability": instability,
-        }
-
-    return timeline_str, face_state
-
-
-# ── CLI Entry Point ───────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    CSV_PATH = r"C:\Users\ahmad\Desktop\humanoid-assistant-demo\openface\OpenFace_2.2.0_win_x64\processed\live_session.csv"
-    timeline, state = analyze_openface_csv(CSV_PATH)
-    print(timeline)
-    print(state)
+# ── Note ─────────────────────────────────────────────────────────────────────
+# analyze_openface_csv() lived here and read an OpenFace CSV produced by the
+# server's own webcam. That mode is gone: video now arrives from the browser and
+# is read by src/faceexpression/mediapipe_analyzer.py instead.
+#
+# It also wrote two FIXED paths (data/analysis/frame_level_emotions.csv and
+# final_emotions.txt), so two concurrent requests overwrote each other and could
+# raise PermissionError on Windows from a request whose analysis had succeeded.
+# The replacement writes nothing to disk at all.
+#
+# classify_emotion and smooth_emotions above are still used by
+# src/streaming/streaming_face.py (live stream), which moves to MediaPipe in
+# Phase 4.

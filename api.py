@@ -36,7 +36,7 @@ from src.core.config import TEXT_ONLY_MODE, API_KEYS
 
 # ── Conditionally import disabled routers ─────────────────────────────────────
 if not TEXT_ONLY_MODE:
-    from routers import voice, multimodal, stream
+    from routers import voice, video, stream
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -57,7 +57,7 @@ class APIKeyMiddleware:
       - Requests from localhost / 127.0.0.1 (local dev)
 
     Always PROTECTED (key required):
-      - /analyze/*   (text, voice, multimodal)
+      - /analyze/*   (text, voice, video)
       - /ws/stream   (websocket)
     """
     def __init__(self, app):
@@ -112,8 +112,18 @@ async def lifespan(app: FastAPI):
     print(f"[STARTUP] Mode: {'TEXT ONLY' if TEXT_ONLY_MODE else 'FULL'}")
     print(f"[STARTUP] API Keys loaded: {len(API_KEYS)}")
 
-    for sub in ("data/recordings", "data/processed"):
+    for sub in ("data/recordings", "data/processed", "data/jobs"):
         os.makedirs(os.path.join(PROJECT_ROOT, sub), exist_ok=True)
+
+    # Clear any working directories orphaned by a previous process that was
+    # killed mid-request. Each request cleans up after itself in a finally
+    # block, but that cannot survive a SIGKILL, an OOM kill or a reboot.
+    if not TEXT_ONLY_MODE:
+        from routers.video import sweep_stale_jobs
+        swept = sweep_stale_jobs()
+        if swept:
+            print(f"[STARTUP] Removed {swept} stale job director"
+                  f"{'y' if swept == 1 else 'ies'} from a previous run.")
 
     from src.core.model_registry import registry
     await asyncio.to_thread(registry.load_all)
@@ -155,7 +165,7 @@ app.include_router(mock.router, prefix="/mock", tags=["Contract Sandbox"])
 
 if not TEXT_ONLY_MODE:
     app.include_router(voice.router,      prefix="/analyze", tags=["Voice Analysis"])
-    app.include_router(multimodal.router, prefix="/analyze", tags=["Multimodal Analysis"])
+    app.include_router(video.router,      prefix="/analyze", tags=["Video Analysis"])
     app.include_router(stream.router,     tags=["Live Stream"])
 
 # ── Health check ──────────────────────────────────────────────────────────────
