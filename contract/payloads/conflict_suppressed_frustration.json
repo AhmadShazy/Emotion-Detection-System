@@ -2,7 +2,7 @@
   "session_id": "sess-mock-conflict",
   "user_input": {
     "text": "Sure, I can redo it.",
-    "timestamp": "2026-08-22T07:48:10Z"
+    "timestamp": "2026-08-22T08:07:50Z"
   },
   "emotion_analysis": {
     "dominant_emotion": "angry",
@@ -28,5 +28,10 @@
   "tone_analysis": {
     "tone": "hostile",
     "confidence": 0.82
+  },
+  "conflict_analysis": {
+    "detected": true,
+    "type": "suppressed_frustration",
+    "details": "Face is neutral but voice is angry."
   }
 }

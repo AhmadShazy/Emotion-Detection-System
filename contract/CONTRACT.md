@@ -1,4 +1,4 @@
-# Emotion Payload Contract — v1
+# Emotion Payload Contract — v1.1
 
 **The input module → the LLM module.**
 
@@ -54,14 +54,25 @@ someone saying *"It is fine, really."* with an angry voice and a smiling face:
   "tone_analysis": {
     "tone": "hostile",
     "confidence": 0.82
+  },
+
+  "conflict_analysis": {
+    "detected": true,
+    "type":     "masked_anger",
+    "details":  "Face appears happy but voice indicates anger."
   }
 }
 ```
 
-Note `happy` (0.48) scores higher than `angry` (0.39), yet `dominant_emotion` is
-`angry`. **That is correct, not a bug** — see the probabilities section below.
+Two things to notice:
 
-Exactly four top-level keys. No others are ever added.
+- `happy` (0.48) scores higher than `angry` (0.39), yet `dominant_emotion` is
+  `angry`. **That is correct, not a bug** — see the probabilities section below.
+- `conflict_analysis` tells you *why*: the smile was a mask. This is the field
+  that lets you answer *"you say you're fine, but you don't sound fine"* instead
+  of treating the user as openly hostile.
+
+Exactly five top-level keys, all always present.
 
 ---
 
@@ -97,10 +108,9 @@ user spoke.
 **The main answer — what the person feels.** Always one of these 15:
 
 ```
-happy    sad      angry     surprised  neutral
-joy      calm     fear      disgust    surprised
-shame    guilt    anxiety   frustration
-empathetic        concerned
+happy   sad     angry       surprised   neutral
+joy     calm    fear        disgust     shame
+guilt   anxiety frustration empathetic  concerned
 ```
 
 ### `emotion_analysis.confidence` · float, 0.0–1.0
@@ -163,6 +173,40 @@ measured    conversational        neutral
 
 Confidence in the tone reading, independent of the emotion confidence.
 
+### `conflict_analysis` · object
+
+**Whether the face and the voice disagree** — the signal that separates someone
+who *is* angry from someone who is *hiding* it.
+
+Always present. When the signals agree, or when fewer than two of them were
+available, it reports `detected: false` / `type: "none"` / `details: ""`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `detected` | bool | A real boolean, never a string |
+| `type` | string | The mismatch found — see below |
+| `details` | string | Plain-English explanation; empty when none |
+
+`type` is one of:
+
+| Value | Face | Voice | What it usually means |
+|---|---|---|---|
+| `masked_anger` | happy | angry | Smiling through anger — politeness over irritation |
+| `suppressed_frustration` | neutral | angry | Holding a professional expression |
+| `masked_sadness` | happy | sad | Putting on a brave face |
+| `internal_sadness` | sad | neutral | Sadness showing despite a level voice |
+| `none` | — | — | Signals agree, or only one was available |
+
+**Text-only requests can never report a conflict** — detecting one needs both a
+face and a voice.
+
+**How to use it.** When `detected` is true, the user's words and their surface
+expression are not telling the whole story. `dominant_emotion` already accounts
+for this (the fusion engine trusts the voice over the face in three of the four
+cases), so you don't need to correct for it — but knowing a mask is present lets
+you choose a much better reply. Acknowledging the gap gently tends to land far
+better than responding to either signal alone.
+
 ---
 
 ## Try it without running any models
@@ -205,48 +249,32 @@ looks like.
 
 The input module commits to these. They are enforced by `tests/test_contract.py`.
 
-1. Exactly the four top-level keys, always all present.
+1. Exactly the five top-level keys, always all present.
 2. `emotion_probabilities` always contains all 15 classes and sums to 1.00 ± 0.02.
 3. `dominant_emotion` is always one of the 15 classes.
 4. `tone` is always one of the 13 listed values.
 5. `user_input.text` is always a string — possibly empty, never `null`.
 6. `timestamp` is always ISO-8601 UTC ending in `Z`.
 7. Both confidence values are always in `[0.0, 1.0]`.
+8. `conflict_analysis` is always present; `detected` is a real boolean, and
+   `type` is `"none"` exactly when `detected` is `false`.
 
 Nothing is ever `null`. Every key is always present.
 
 ---
 
-## Proposed addition (not yet agreed)
+## Changelog
 
-The fusion engine already detects when the face and the voice disagree — it
-identifies *masked anger*, *suppressed frustration*, *masked sadness* and
-*internal sadness*. **That result is currently computed on every request and
-then discarded before the payload is built.**
+### v1.1 — `conflict_analysis` added
 
-Adding it back would be **purely additive**: one new optional top-level key.
-Every existing field keeps its name, type and meaning, so an existing consumer
-cannot break, and can ignore the new block until ready for it.
+One new top-level key. **Purely additive** — every pre-existing field keeps its
+name, type and meaning, so a consumer written against v1 continues to work
+unchanged and can adopt the new block whenever it suits.
 
-```jsonc
-{
-  // ... all four existing keys, completely unchanged ...
+The fusion engine had been detecting face-vs-voice mismatches all along and
+using them to weight its answer; the finding itself was simply being discarded
+before the payload was built. It is now included.
 
-  "conflict_analysis": {          // NEW, optional
-    "detected": true,
-    "type":     "masked_anger",   // or suppressed_frustration
-                                  //    / masked_sadness / internal_sadness / none
-    "details":  "Face appears happy but voice indicates anger."
-  }
-}
-```
+### v1 — initial contract
 
-**Why it is worth asking for.** In the `conflict_masked_anger` example, the user
-says *"It is fine, really."* while sounding angry and looking calm. Today the LLM
-receives `angry / hostile` and would reasonably reply as though it were being
-shouted at. With the extra block it can tell the difference between someone who
-*is* angry and someone who is **hiding** it — and answer with something closer to
-*"you say you're fine, but you don't sound fine."*
-
-That distinction is the thing this module does that a plain sentiment classifier
-cannot.
+`session_id`, `user_input`, `emotion_analysis`, `tone_analysis`.

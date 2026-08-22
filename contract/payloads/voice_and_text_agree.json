@@ -2,7 +2,7 @@
   "session_id": "sess-mock-voice_an",
   "user_input": {
     "text": "I am really not happy with how this turned out.",
-    "timestamp": "2026-08-22T07:48:10Z"
+    "timestamp": "2026-08-22T08:07:49Z"
   },
   "emotion_analysis": {
     "dominant_emotion": "angry",
@@ -28,5 +28,10 @@
   "tone_analysis": {
     "tone": "hostile",
     "confidence": 0.82
+  },
+  "conflict_analysis": {
+    "detected": false,
+    "type": "none",
+    "details": ""
   }
 }

@@ -2,7 +2,7 @@
   "session_id": "sess-mock-conflict",
   "user_input": {
     "text": "I am okay. Just tired.",
-    "timestamp": "2026-08-22T07:48:10Z"
+    "timestamp": "2026-08-22T08:07:50Z"
   },
   "emotion_analysis": {
     "dominant_emotion": "sad",
@@ -28,5 +28,10 @@
   "tone_analysis": {
     "tone": "reflective",
     "confidence": 0.75
+  },
+  "conflict_analysis": {
+    "detected": true,
+    "type": "internal_sadness",
+    "details": "Face shows sadness while voice tries to remain neutral."
   }
 }

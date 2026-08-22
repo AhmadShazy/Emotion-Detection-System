@@ -36,11 +36,24 @@ PAYLOAD_DIR = os.path.join(PROJECT_ROOT, "contract", "payloads")
 # Changing anything in this block is a breaking change for the LLM team.
 # ══════════════════════════════════════════════════════════════════════════════
 
-TOP_LEVEL_KEYS = {"session_id", "user_input", "emotion_analysis", "tone_analysis"}
+TOP_LEVEL_KEYS = {
+    "session_id", "user_input", "emotion_analysis",
+    "tone_analysis", "conflict_analysis",
+}
 
-USER_INPUT_KEYS      = {"text", "timestamp"}
+USER_INPUT_KEYS       = {"text", "timestamp"}
 EMOTION_ANALYSIS_KEYS = {"dominant_emotion", "confidence", "emotion_probabilities"}
-TONE_ANALYSIS_KEYS   = {"tone", "confidence"}
+TONE_ANALYSIS_KEYS    = {"tone", "confidence"}
+CONFLICT_KEYS         = {"detected", "type", "details"}
+
+# The four mismatches the fusion engine can name, plus "none".
+CONFLICT_TYPES = {
+    "none",
+    "masked_anger",            # happy face, angry voice
+    "suppressed_frustration",  # neutral face, angry voice
+    "masked_sadness",          # happy face, sad voice
+    "internal_sadness",        # sad face, neutral voice
+}
 
 # The 15 emotion classes. Every payload carries all fifteen, always.
 EMOTION_CLASSES = {
@@ -121,6 +134,28 @@ def assert_valid_payload(payload: dict, source: str):
     assert isinstance(ta["confidence"], (int, float)) and 0.0 <= ta["confidence"] <= 1.0, \
         f"{source}: tone confidence out of range"
 
+    # ── conflict_analysis ────────────────────────────────────────────────────
+    ca = payload["conflict_analysis"]
+    assert set(ca) == CONFLICT_KEYS, \
+        f"{source}: conflict_analysis keys changed: {sorted(ca)}"
+    assert isinstance(ca["detected"], bool), \
+        f"{source}: conflict detected must be a real boolean, not {type(ca['detected'])}"
+    assert ca["type"] in CONFLICT_TYPES, \
+        f"{source}: unknown conflict type '{ca['type']}'"
+    assert isinstance(ca["details"], str), \
+        f"{source}: conflict details must be a string, empty rather than null"
+
+    # detected and type must agree — a mismatch here would mislead the LLM
+    # in exactly the situation the field exists to clarify.
+    if ca["detected"]:
+        assert ca["type"] != "none", \
+            f"{source}: conflict detected but type is 'none'"
+        assert ca["details"], \
+            f"{source}: conflict detected but no explanation given"
+    else:
+        assert ca["type"] == "none", \
+            f"{source}: no conflict detected but type is '{ca['type']}'"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Layer 1 — the frozen examples (fast, no models)
@@ -177,6 +212,37 @@ def test_examples_cover_the_hard_cases():
         "No silence example — the LLM team must handle an empty transcript"
     assert "low_confidence_disagreement" in names, \
         "No low-confidence example — the LLM team must handle weak evidence"
+
+
+def test_conflict_examples_actually_report_their_conflict():
+    """
+    The conflict scenarios exist to prove the field works. If one of them comes
+    back with detected=false, the detection has broken — which would be
+    invisible otherwise, since the payload would still be structurally valid.
+    """
+    expected = {
+        "conflict_masked_anger":           "masked_anger",
+        "conflict_suppressed_frustration": "suppressed_frustration",
+        "conflict_internal_sadness":       "internal_sadness",
+    }
+    for name, conflict_type in expected.items():
+        path = os.path.join(PAYLOAD_DIR, f"{name}.json")
+        assert os.path.isfile(path), f"missing example {name}.json"
+        with open(path, encoding="utf-8") as f:
+            payload = json.load(f)
+        ca = payload["conflict_analysis"]
+        assert ca["detected"] is True, f"{name}: conflict was not detected"
+        assert ca["type"] == conflict_type, \
+            f"{name}: expected '{conflict_type}', got '{ca['type']}'"
+
+
+def test_single_signal_payloads_report_no_conflict():
+    """A conflict needs both a face and a voice. Text alone cannot produce one."""
+    for name in ("text_only_neutral", "text_only_joy", "text_only_sadness"):
+        with open(os.path.join(PAYLOAD_DIR, f"{name}.json"), encoding="utf-8") as f:
+            payload = json.load(f)
+        assert payload["conflict_analysis"]["detected"] is False, \
+            f"{name}: text-only input cannot have a face/voice conflict"
 
 
 def test_empty_transcript_is_representable():

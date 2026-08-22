@@ -2,7 +2,7 @@
   "session_id": "sess-mock-text_onl",
   "user_input": {
     "text": "Okay, that works for me.",
-    "timestamp": "2026-08-22T07:48:10Z"
+    "timestamp": "2026-08-22T08:07:49Z"
   },
   "emotion_analysis": {
     "dominant_emotion": "happy",
@@ -28,5 +28,10 @@
   "tone_analysis": {
     "tone": "cheerful",
     "confidence": 0.8
+  },
+  "conflict_analysis": {
+    "detected": false,
+    "type": "none",
+    "details": ""
   }
 }
