@@ -1,8 +1,15 @@
+"""
+src/interactive_modes.py
+========================
+Analysis steps shared by the API routes.
+
+Everything here works on a FILE that arrived from a client. Nothing captures
+from a microphone or a camera — the server owns no capture devices, which is
+what lets many people use it at once.
+"""
+
 import sys
 import os
-import time
-import datetime
-import threading
 import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,27 +23,10 @@ except ImportError:
     SEREngine = None
 
 try:
-    from src.ser.recorder import record_audio
-except ImportError:
-    record_audio = None
-
-try:
     from src.text_emotion.analysis import analyze_text_emotion, load_emotion_model
 except ImportError:
     def analyze_text_emotion(text, threshold=0.1): return []
     def load_emotion_model(): return None
-
-try:
-    from src.faceexpression.classifier import analyze_openface_csv
-except ImportError:
-    def analyze_openface_csv(csv_path): return None
-
-try:
-    import sounddevice as sd
-    from scipy.io.wavfile import write as wav_write
-except ImportError:
-    sd        = None
-    wav_write = None
 
 from src.streaming.unified_pipeline import build_text_state
 
@@ -108,27 +98,6 @@ def process_text_emotion(text: str) -> dict:
     results    = analyze_text_emotion(text, threshold=0.05)
     text_state = build_text_state(text, results)
     return text_state
-
-
-def record_audio_clip(duration: int = 10) -> str:
-    """
-    Records an audio clip for a specified duration.
-    Returns path to saved WAV file, or None if unavailable.
-    """
-    if not record_audio:
-        return None
-
-    DATA_DIR = os.path.join(SCRIPT_DIR, "data", "recordings")
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    wav_path  = os.path.join(DATA_DIR, f"voice_analysis_{timestamp}.wav")
-
-    try:
-        record_audio(duration=duration, filename=wav_path)
-        return wav_path
-    except Exception:
-        return None
 
 
 def process_voice_pipeline(wav_path: str):
@@ -208,46 +177,3 @@ def process_voice_pipeline(wav_path: str):
               f"conf={ser_confidence:.3f}, reliability={reliability:.3f}")
 
     return text_state, voice_state, stt_result, ser_result
-
-
-def process_multimodal_data(
-    wav_path:       str,
-    csv_path:       str,
-    face_available: bool = True,
-):
-    """
-    Processes audio and face tracking data together.
-    Uses the same hallucination-filtered voice pipeline.
-
-    Returns:
-        tuple: (text_state, voice_state, face_state,
-                stt_result, ser_result, face_timeline)
-    """
-    text_state  = None
-    voice_state = None
-    stt_result  = "N/A"
-    ser_result  = "N/A"
-
-    if wav_path and os.path.exists(wav_path):
-        text_state, voice_state, stt_result, ser_result = (
-            process_voice_pipeline(wav_path)
-        )
-
-    face_timeline = "N/A"
-    face_state    = None
-
-    if face_available:
-        time.sleep(1)   # short buffer for OpenFace to flush CSV
-        if csv_path and os.path.exists(csv_path):
-            result = analyze_openface_csv(csv_path)
-            if result:
-                face_timeline, face_state = result
-                if not face_timeline:
-                    face_timeline = "No valid face frames detected."
-        else:
-            face_timeline = "CSV not generated."
-
-    return (
-        text_state, voice_state, face_state,
-        stt_result, ser_result, face_timeline,
-    )

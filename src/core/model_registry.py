@@ -176,6 +176,50 @@ class ModelRegistry:
             huggingface_hub.hf_hub_download        = _patched
             huggingface_hub._patched_by_ser_engine = True
 
+        # ── Cross-platform inspect patch for SpeechBrain LazyModule ──
+        try:
+            from speechbrain.utils.importutils import LazyModule
+            import importlib
+            import warnings
+            from types import ModuleType
+
+            def _patched_ensure_module(self, stacklevel: int) -> ModuleType:
+                import sys
+                import os
+                import inspect
+                importer_frame = None
+                try:
+                    importer_frame = inspect.getframeinfo(sys._getframe(stacklevel + 1))
+                except AttributeError:
+                    warnings.warn(
+                        "Failed to inspect frame to check if we should ignore "
+                        "importing a module lazily."
+                    )
+
+                if importer_frame is not None and (
+                    importer_frame.filename.endswith("/inspect.py") or
+                    importer_frame.filename.endswith("\\inspect.py") or
+                    os.path.basename(importer_frame.filename) == "inspect.py"
+                ):
+                    raise AttributeError()
+
+                if self.lazy_module is None:
+                    try:
+                        if self.package is None:
+                            self.lazy_module = importlib.import_module(self.target)
+                        else:
+                            self.lazy_module = importlib.import_module(
+                                f".{self.target}", self.package
+                            )
+                    except Exception as e:
+                        raise ImportError(f"Lazy import of {repr(self)} failed") from e
+
+                return self.lazy_module
+
+            LazyModule.ensure_module = _patched_ensure_module
+        except Exception as pe:
+            print(f"[Registry] Warning: LazyModule patch failed: {pe}")
+
 
 # ── Module-level singleton ────────────────────────────────────────────────────
 registry = ModelRegistry()

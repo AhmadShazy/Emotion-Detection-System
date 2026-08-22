@@ -32,7 +32,6 @@
 ```text
 humanoid-assistant-demo/
 ├── api.py                          # FastAPI application entry point
-├── main.py                         # Legacy CLI entry point
 ├── requirements.txt                # Python dependencies
 ├── frontend/                       # Modern Web UI assets
 │   ├── index.html                  # Main UI layout
@@ -112,7 +111,7 @@ Once the server has started, open your web browser and navigate to:
 - **🎬 Multimodal Session**: Records both your webcam (analyzed in the background via OpenFace) and microphone. Returns a fused temporal report.
 - **🌐 Live Stream**: Connects via WebSockets. Captures audio continuously, uses VAD to chunk sentences, and provides real-time multimodal feedback.
 
-*(Legacy Terminal Interface: You can still run the old terminal menu by executing `python main.py`)*
+*(The legacy terminal menu (`main.py`) was removed — the FastAPI server is the only entry point. This README is being rewritten against the current codebase; treat the sections above with caution until then.)*
 
 ---
 

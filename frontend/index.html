@@ -61,7 +61,7 @@
                 <nav class="tabs">
                     <button class="tab-btn active" data-tab="text">💬 Text</button>
                     <button class="tab-btn" data-tab="voice">🎤 Voice</button>
-                    <button class="tab-btn" data-tab="multimodal">🎥 Multimodal</button>
+                    <button class="tab-btn" data-tab="multimodal">🎥 Video</button>
                     <button class="tab-btn" data-tab="stream">🌐 Live Stream</button>
                 </nav>
 
@@ -117,17 +117,12 @@
 
                     <!-- ════════════════════ MULTIMODAL ══════════════ -->
                     <div id="tab-multimodal" class="tab-pane">
-                        <h2>Multimodal Recording</h2>
-
-                        <div class="info-banner">
-                            <span class="banner-icon">ℹ️</span>
-                            <p>
-                                The <strong>server</strong> records your camera and
-                                microphone via OpenFace. Your browser shows a live
-                                preview below so you can see yourself.
-                                Maximum 30 seconds.
-                            </p>
-                        </div>
+                        <h2>Video Analysis</h2>
+                        <p class="subtitle">
+                            Record yourself or choose a video from your device.
+                            Face, voice and words are analysed together.
+                            The first 30 seconds are used.
+                        </p>
 
                         <div class="camera-preview-wrapper">
                             <video id="camera-preview"
@@ -136,29 +131,42 @@
                                    style="display:none;">
                             </video>
                             <div class="camera-placeholder" id="camera-placeholder">
-                                <span class="camera-icon">📷</span>
-                                <p>Camera preview will appear here during recording</p>
+                                <span class="camera-icon">🎥</span>
+                                <p>Your camera appears here while recording</p>
                             </div>
                         </div>
 
-                        <p id="multimodal-status" class="status-text"
-                           style="margin:0.5rem 0;">Ready</p>
+                        <div class="voice-controls">
+                            <div class="record-section">
+                                <button id="btn-record-video" class="record-btn">
+                                    <span class="record-icon">⏺</span> Record Video
+                                </button>
+                                <span id="multimodal-status" class="status-text">Ready</span>
+                            </div>
 
-                        <div class="multimodal-controls">
-                            <button id="btn-start-multimodal" class="primary-btn">
-                                Start Recording
-                            </button>
-                            <button id="btn-stop-multimodal" class="danger-btn"
-                                    style="display:none;">
-                                Stop Recording
-                            </button>
+                            <div class="recording-timer" id="multimodal-timer"
+                                 style="display:none;">
+                                <span class="pulse-dot"></span>
+                                <span id="timer-display">00:00</span> / 00:30
+                            </div>
+
+                            <div class="divider">OR</div>
+
+                            <div class="upload-section">
+                                <input type="file" id="video-file"
+                                       accept="video/*" class="file-input">
+                                <label for="video-file" class="file-label">
+                                    Choose a Video
+                                </label>
+                                <span id="video-file-name" class="status-text">
+                                    No file chosen
+                                </span>
+                            </div>
                         </div>
 
-                        <div class="recording-timer" id="multimodal-timer"
-                             style="display:none;">
-                            <span class="pulse-dot"></span>
-                            <span id="timer-display">00:00</span> / 00:30
-                        </div>
+                        <button id="btn-analyze-video" class="primary-btn" disabled>
+                            Analyze Video
+                        </button>
                     </div>
 
                     <!-- ════════════════════ STREAM ══════════════════ -->

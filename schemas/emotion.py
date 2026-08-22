@@ -62,41 +62,81 @@ class ToneAnalysis(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class ConflictAnalysis(BaseModel):
+    """
+    Reports a mismatch between what the face shows and what the voice conveys.
+
+    This is the signal that distinguishes someone who IS angry from someone who
+    is HIDING that they are angry — the two call for very different replies.
+    Always present; `detected` is false when the signals agree or when fewer
+    than two of them were available.
+    """
+    detected: bool = Field(
+        description="True when the face and voice point at different emotions."
+    )
+    type: str = Field(
+        description=(
+            "Which mismatch was found: 'masked_anger' (happy face, angry voice), "
+            "'suppressed_frustration' (neutral face, angry voice), "
+            "'masked_sadness' (happy face, sad voice), "
+            "'internal_sadness' (sad face, neutral voice), or 'none'."
+        ),
+        examples=["masked_anger"],
+    )
+    details: str = Field(
+        description="Human-readable explanation. Empty string when none was detected.",
+        examples=["Face appears happy but voice indicates anger."],
+    )
+
+
 # ── UNIFIED RESPONSE MODEL ────────────────────────────────────────────────────
 
 class UnifiedEmotionResponse(BaseModel):
     """
-    V2 payload. Conversation history removed.
-    Context window is managed by the LLM side.
+    The payload every mode emits — text, voice, multimodal and live stream all
+    return this identical shape, so the LLM side needs only one parser.
+
+    See contract/CONTRACT.md for the full field reference, and
+    tests/test_contract.py for the invariants this shape guarantees.
     """
     session_id: str
     user_input: UserInput
     emotion_analysis: EmotionAnalysis
     tone_analysis: ToneAnalysis
+    conflict_analysis: ConflictAnalysis
 
     class Config:
         extra = "allow"
         json_schema_extra = {
+            # A real payload: someone saying "It is fine, really." with an angry
+            # voice and a smiling face. Note that `happy` scores higher than
+            # `angry` while dominant_emotion is `angry` — always trust
+            # dominant_emotion, never the argmax of the probabilities.
             "example": {
-                "session_id": "sess-a1b2c3d4",
+                "session_id": "sess-mock-conflict",
                 "user_input": {
-                    "text": "I feel really happy today!",
-                    "timestamp": "2026-05-10T00:00:00Z"
+                    "text": "It is fine, really.",
+                    "timestamp": "2026-08-22T07:48:10Z"
                 },
                 "emotion_analysis": {
-                    "dominant_emotion": "joy",
-                    "confidence": 0.87,
+                    "dominant_emotion": "angry",
+                    "confidence": 0.29,
                     "emotion_probabilities": {
-                        "happy": 0.87, "sad": 0.01, "angry": 0.01,
-                        "surprised": 0.01, "neutral": 0.01, "fear": 0.01,
-                        "empathetic": 0.01, "concerned": 0.01, "disgust": 0.01,
+                        "happy": 0.48, "sad": 0.01, "angry": 0.39,
+                        "surprised": 0.01, "fear": 0.01, "disgust": 0.01,
+                        "neutral": 0.01, "empathetic": 0.01, "concerned": 0.01,
                         "shame": 0.01, "guilt": 0.01, "anxiety": 0.01,
                         "frustration": 0.01, "joy": 0.01, "calm": 0.01
                     }
                 },
                 "tone_analysis": {
-                    "tone": "cheerful",
-                    "confidence": 0.80
+                    "tone": "hostile",
+                    "confidence": 0.82
+                },
+                "conflict_analysis": {
+                    "detected": True,
+                    "type": "masked_anger",
+                    "details": "Face appears happy but voice indicates anger."
                 }
             }
         }
