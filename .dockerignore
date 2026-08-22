@@ -1,0 +1,35 @@
+# Without this file the build context is several GB — .venv, the model caches
+# and the recorded sessions would all be copied in.
+
+# Virtualenvs
+.venv/
+.venv_broken/
+**/__pycache__/
+*.pyc
+
+# Model caches — re-downloaded at build time, never copied in
+external/
+wav2vec2_checkpoints/
+
+# Runtime recordings and OpenFace output
+data/
+
+# Secrets. The template is fine; the real file must never enter an image.
+.env
+.env.*
+!.env.example
+
+# Repo and tooling
+.git/
+.gitignore
+.vscode/
+.idea/
+*.log
+
+# Docs and tests are not needed at runtime.
+# contract/payloads IS needed — the /mock endpoints serve it.
+tests/
+pytest.ini
+docs/
+*.md
+!contract/CONTRACT.md
