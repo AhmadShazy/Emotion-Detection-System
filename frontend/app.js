@@ -712,7 +712,10 @@ async function startVideoRecording() {
 
         const kb = Math.round(videoBlob.size / 1024);
         setVideoStatus(`✅ Recorded ${kb} KB — click Analyze Video`);
-        if (videoFileName) videoFileName.textContent = 'browser_recording';
+        // Include a real extension. The server accepts either a known MIME type
+        // or a known suffix, and a name with no extension fails the second check.
+        const ext = mimeType.startsWith('video/mp4') ? 'mp4' : 'webm';
+        if (videoFileName) videoFileName.textContent = `browser_recording.${ext}`;
         if (btnAnalyzeVideo) btnAnalyzeVideo.disabled = false;
         if (videoFile) videoFile.value = '';
     };

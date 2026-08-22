@@ -97,7 +97,11 @@ async def analyze_video(
     file: UploadFile = File(...),
     session_id: Optional[str] = Form(default=None),
 ):
-    content_type = (file.content_type or "").lower()
+    # A Content-Type may carry parameters, and MediaRecorder always sends them:
+    # a browser recording arrives as "video/webm;codecs=vp9,opus", not plain
+    # "video/webm". Compare only the type/subtype or every in-browser recording
+    # is rejected before it reaches ffprobe.
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
     filename     = (file.filename or "").lower()
 
     # A hint, not evidence — ffprobe is the authority on whether this decodes.
