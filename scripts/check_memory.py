@@ -29,6 +29,11 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# This script's report output uses emoji, which raise UnicodeEncodeError
+# on a default Windows cp1252 console. Widen the streams first.
+from src.core.console import enable_utf8_console
+enable_utf8_console()
+
 try:
     import psutil
 except ImportError:

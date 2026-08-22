@@ -24,7 +24,20 @@ tqdm
 
 # Web Server & API
 fastapi
-uvicorn
+# [standard] pulls in the websockets protocol implementation. Plain `uvicorn`
+# cannot serve /ws/stream at all — the handshake fails before reaching the app.
+uvicorn[standard]
 python-multipart
 python-dotenv
 httpx
+
+# Diagnostics
+# Required by scripts/check_memory.py.
+psutil
+
+# ── External binary requirement (NOT installable via pip) ─────────────────────
+# ffmpeg must be on PATH. openai-whisper shells out to it to decode audio in
+# model.transcribe(); without it every /analyze/voice request fails at STT.
+#   Windows:  winget install Gyan.FFmpeg
+#   Debian:   apt install ffmpeg
+#   macOS:    brew install ffmpeg

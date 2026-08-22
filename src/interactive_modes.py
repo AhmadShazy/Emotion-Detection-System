@@ -16,11 +16,6 @@ except ImportError:
     SEREngine = None
 
 try:
-    from src.ser.recorder import record_audio
-except ImportError:
-    record_audio = None
-
-try:
     from src.text_emotion.analysis import analyze_text_emotion, load_emotion_model
 except ImportError:
     def analyze_text_emotion(text, threshold=0.1): return []
@@ -108,27 +103,6 @@ def process_text_emotion(text: str) -> dict:
     results    = analyze_text_emotion(text, threshold=0.05)
     text_state = build_text_state(text, results)
     return text_state
-
-
-def record_audio_clip(duration: int = 10) -> str:
-    """
-    Records an audio clip for a specified duration.
-    Returns path to saved WAV file, or None if unavailable.
-    """
-    if not record_audio:
-        return None
-
-    DATA_DIR = os.path.join(SCRIPT_DIR, "data", "recordings")
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    wav_path  = os.path.join(DATA_DIR, f"voice_analysis_{timestamp}.wav")
-
-    try:
-        record_audio(duration=duration, filename=wav_path)
-        return wav_path
-    except Exception:
-        return None
 
 
 def process_voice_pipeline(wav_path: str):

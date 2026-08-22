@@ -402,7 +402,10 @@ btnAnalyzeText.addEventListener('click', async () => {
                 'Content-Type': 'application/json',
                 'X-API-Key': SESSION_API_KEY,
             },
-            body: JSON.stringify({ text }),
+            // Return the session id so the server keeps this conversation's
+            // emotion memory. Without it every request minted a fresh session,
+            // which pinned confidence at 0.7x raw and disabled all smoothing.
+            body: JSON.stringify({ text, session_id: currentSessionId }),
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
@@ -574,6 +577,9 @@ btnAnalyzeVoice.addEventListener('click', async () => {
         voiceBlob,
         fileNameDisplay.textContent === "No file chosen" ? "audio.wav" : fileNameDisplay.textContent
     );
+    // Same reason as the text route — keep the server's emotion memory alive
+    // across turns instead of starting a new session on every request.
+    if (currentSessionId) formData.append('session_id', currentSessionId);
 
     try {
         const res = await fetch(`${API_BASE}/analyze/voice`, {

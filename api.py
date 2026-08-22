@@ -19,6 +19,12 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# Widen stdout/stderr to UTF-8 before anything logs. Startup banners and most
+# log lines contain emoji / box-drawing characters, which raise
+# UnicodeEncodeError on a default Windows cp1252 console and abort startup.
+from src.core.console import enable_utf8_console
+enable_utf8_console()
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles

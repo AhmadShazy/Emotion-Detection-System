@@ -32,10 +32,48 @@ class StreamingSER(threading.Thread):
             "reliability": 0.0, "peak_emotion": None, "average_emotion": None
         }
         
-        # Load model once at startup!
-        print("Loading SER Engine for streaming...")
+        # SEREngine is a thin wrapper — the model itself was already loaded
+        # once at startup by ModelRegistry. This just takes a reference.
         self.ser_engine = SEREngine()
-        print("SER Engine loaded.")
+
+        # Class order is read from the checkpoint, never hardcoded — see below.
+        self.idx_to_label = self._build_idx_to_label()
+
+    # IEMOCAP short codes -> the labels the fusion engine expects.
+    _LABEL_MAP = {"hap": "Happy", "ang": "Angry", "neu": "Neutral", "sad": "Sad"}
+
+    def _build_idx_to_label(self) -> dict:
+        """
+        Derives {class_index: label} from the loaded checkpoint's own label
+        encoder instead of hardcoding it.
+
+        Why this matters: the previous hardcoded map was
+            {0: 'Angry', 1: 'Happy', 2: 'Neutral', 3: 'Sad'}
+        but the checkpoint's actual order is
+            {0: 'neu',   1: 'ang',   2: 'hap',     3: 'sad'}
+        so three of the four labels were reported wrong in live streaming —
+        neutral read as angry, angry as happy, happy as neutral. Only sad was
+        right. Voice carries the heaviest weight in fusion, so this silently
+        corrupted every live result.
+
+        Reading the order from the model makes that class of bug impossible.
+        """
+        # Correct order for this checkpoint, used only if introspection fails.
+        fallback = {0: "Neutral", 1: "Angry", 2: "Happy", 3: "Sad"}
+
+        try:
+            encoder = self.ser_engine.classifier.hparams.label_encoder
+            derived = {
+                int(idx): self._LABEL_MAP.get(str(code).lower(), str(code).title())
+                for idx, code in encoder.ind2lab.items()
+            }
+            if derived:
+                print(f"[SER] Class order read from checkpoint: {derived}")
+                return derived
+        except Exception as exc:
+            print(f"[SER] Could not read label encoder ({exc}) — using known order.")
+
+        return fallback
 
     def run(self):
         self.running = True
@@ -60,14 +98,8 @@ class StreamingSER(threading.Thread):
             # Assume rms around 0.02 is reasonably audible speech, 0.005 is very quiet
             energy_score = min(1.0, rms / 0.02)
             
-            label_map = {
-                'hap': 'Happy',
-                'ang': 'Angry',
-                'neu': 'Neutral',
-                'sad': 'Sad'
-            }
-            idx_to_label = {0: 'Angry', 1: 'Happy', 2: 'Neutral', 3: 'Sad'}
-            
+            idx_to_label = self.idx_to_label
+
             # Mini-chunk windowing (1 second chunks with NO overlap to maximize CPU efficiency)
             chunk_size = self.sample_rate  # 1 second
             step_size = self.sample_rate  # 1 second step
