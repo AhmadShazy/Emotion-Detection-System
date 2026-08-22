@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
-from routers import text
+from routers import text, mock
 from src.core.config import TEXT_ONLY_MODE, API_KEYS
 
 # ── Conditionally import disabled routers ─────────────────────────────────────
@@ -148,6 +148,10 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(text.router, prefix="/analyze", tags=["Text Analysis"])
+
+# Contract sandbox for the LLM team. Registered in BOTH modes and loads no
+# models, so it stays available on a small text-only deployment.
+app.include_router(mock.router, prefix="/mock", tags=["Contract Sandbox"])
 
 if not TEXT_ONLY_MODE:
     app.include_router(voice.router,      prefix="/analyze", tags=["Voice Analysis"])

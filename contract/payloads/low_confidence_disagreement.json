@@ -1,0 +1,32 @@
+{
+  "session_id": "sess-mock-low_conf",
+  "user_input": {
+    "text": "I guess so.",
+    "timestamp": "2026-08-22T07:48:11Z"
+  },
+  "emotion_analysis": {
+    "dominant_emotion": "neutral",
+    "confidence": 0.41,
+    "emotion_probabilities": {
+      "happy": 0.15,
+      "sad": 0.1,
+      "angry": 0.01,
+      "surprised": 0.01,
+      "fear": 0.01,
+      "disgust": 0.01,
+      "neutral": 0.63,
+      "empathetic": 0.01,
+      "concerned": 0.01,
+      "shame": 0.01,
+      "guilt": 0.01,
+      "anxiety": 0.01,
+      "frustration": 0.01,
+      "joy": 0.01,
+      "calm": 0.01
+    }
+  },
+  "tone_analysis": {
+    "tone": "conversational",
+    "confidence": 0.75
+  }
+}

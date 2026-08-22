@@ -1,0 +1,32 @@
+{
+  "session_id": "sess-mock-text_onl",
+  "user_input": {
+    "text": "Okay, that works for me.",
+    "timestamp": "2026-08-22T07:48:10Z"
+  },
+  "emotion_analysis": {
+    "dominant_emotion": "happy",
+    "confidence": 0.49,
+    "emotion_probabilities": {
+      "happy": 0.72,
+      "sad": 0.02,
+      "angry": 0.02,
+      "surprised": 0.02,
+      "fear": 0.02,
+      "disgust": 0.02,
+      "neutral": 0.02,
+      "empathetic": 0.02,
+      "concerned": 0.02,
+      "shame": 0.02,
+      "guilt": 0.02,
+      "anxiety": 0.02,
+      "frustration": 0.02,
+      "joy": 0.02,
+      "calm": 0.02
+    }
+  },
+  "tone_analysis": {
+    "tone": "cheerful",
+    "confidence": 0.8
+  }
+}
