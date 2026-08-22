@@ -150,6 +150,20 @@ class LLMAdapter:
         session_id = context.get("session_id", "sess-unknown")
         timestamp  = raw_inputs.get("timestamp", "")
 
+        # ── Conflict analysis ────────────────────────────────────────────────
+        # The fusion engine detects when the face and the voice disagree, and
+        # names the mismatch (masked_anger, suppressed_frustration,
+        # masked_sadness, internal_sadness). It already re-weights the modalities
+        # accordingly, so the result below always influenced dominant_emotion —
+        # but until now the finding itself was discarded here and never reached
+        # the LLM.
+        #
+        # It matters because "angry" and "hiding that they are angry" call for
+        # very different replies, and the second is the case this system is
+        # uniquely able to spot. Always emitted, with detected=false rather than
+        # being absent, so consumers never have to check for the key.
+        conflict = fusion_output.get("conflict_analysis") or {}
+
         return {
             "session_id": session_id,
             "user_input": {
@@ -164,5 +178,10 @@ class LLMAdapter:
             "tone_analysis": {
                 "tone":       tone,
                 "confidence": tone_conf,
+            },
+            "conflict_analysis": {
+                "detected": bool(conflict.get("detected", False)),
+                "type":     str(conflict.get("type", "none")),
+                "details":  str(conflict.get("details", "")),
             },
         }

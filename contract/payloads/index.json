@@ -1,0 +1,104 @@
+{
+  "generated_by": "scripts/generate_contract_payloads.py",
+  "generated_at": "2026-08-22T08:07:50Z",
+  "note": "Produced by running the real fusion engine. Do not hand-edit — re-run the generator instead.",
+  "scenarios": [
+    {
+      "name": "text_only_neutral",
+      "description": "Plainest case. Text mode, nothing notable in the message.",
+      "signals": [
+        "text"
+      ],
+      "dominant_emotion": "happy",
+      "confidence": 0.49,
+      "tone": "cheerful"
+    },
+    {
+      "name": "text_only_joy",
+      "description": "Strong positive from text alone. Note dominant_emotion refines to 'joy'.",
+      "signals": [
+        "text"
+      ],
+      "dominant_emotion": "joy",
+      "confidence": 0.69,
+      "tone": "cheerful"
+    },
+    {
+      "name": "text_only_sadness",
+      "description": "Negative from text alone. Guards the label-mapping regression where 'my car broke down' used to come back as happy.",
+      "signals": [
+        "text"
+      ],
+      "dominant_emotion": "sad",
+      "confidence": 0.5,
+      "tone": "reflective"
+    },
+    {
+      "name": "voice_and_text_agree",
+      "description": "Voice mode. Transcript and vocal tone point the same way, so confidence is higher.",
+      "signals": [
+        "text",
+        "voice"
+      ],
+      "dominant_emotion": "angry",
+      "confidence": 0.27,
+      "tone": "hostile"
+    },
+    {
+      "name": "conflict_masked_anger",
+      "description": "THE IMPORTANT ONE. Smiling face over an angry voice. The user says they are fine and they are not. Fusion re-weights toward the voice.",
+      "signals": [
+        "text",
+        "voice",
+        "face"
+      ],
+      "dominant_emotion": "angry",
+      "confidence": 0.29,
+      "tone": "hostile"
+    },
+    {
+      "name": "conflict_suppressed_frustration",
+      "description": "Flat face, angry voice — someone holding a professional expression.",
+      "signals": [
+        "text",
+        "voice",
+        "face"
+      ],
+      "dominant_emotion": "angry",
+      "confidence": 0.31,
+      "tone": "hostile"
+    },
+    {
+      "name": "conflict_internal_sadness",
+      "description": "Sad face, level voice. The one conflict type that trusts the FACE more.",
+      "signals": [
+        "text",
+        "voice",
+        "face"
+      ],
+      "dominant_emotion": "sad",
+      "confidence": 0.17,
+      "tone": "reflective"
+    },
+    {
+      "name": "low_confidence_disagreement",
+      "description": "All three signals disagree and none is confident. The LLM should treat a payload like this as weak evidence, not a firm read.",
+      "signals": [
+        "text",
+        "voice",
+        "face"
+      ],
+      "dominant_emotion": "neutral",
+      "confidence": 0.41,
+      "tone": "conversational"
+    },
+    {
+      "name": "no_speech_detected",
+      "description": "Silence, or a transcript filtered as a Whisper hallucination. user_input.text is an EMPTY STRING — the LLM must handle this.",
+      "signals": [],
+      "dominant_emotion": "neutral",
+      "confidence": 0.3,
+      "tone": "measured"
+    }
+  ]
+}

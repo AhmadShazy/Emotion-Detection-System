@@ -10,7 +10,6 @@ from src.streaming.audio_stream import AudioStreamer
 from src.streaming.streaming_stt import StreamingSTT
 from src.streaming.streaming_ser import StreamingSER
 from src.streaming.streaming_face import StreamingFace
-from src.streaming.assistant_response_engine import AssistantResponseEngine
 from src.text_emotion.analysis import analyze_text_emotion
 from src.streaming.unified_pipeline import build_text_state, process_and_print_unified_json
 
@@ -32,112 +31,12 @@ def _safe_emotion(state: dict, default: str = "neutral") -> str:
     return str(val)
 
 
-def run_live_streaming_session():
-    print("\n=======================================================")
-    print(">>> HUMANOID ASSISTANT V2.1 - TURN-BASED INTERACTION")
-    print("=======================================================")
-
-    stt_audio_queue = queue.Queue(maxsize=100)
-    ser_audio_queue = queue.Queue(maxsize=100)
-    text_stt_queue  = queue.Queue()
-    ui_status_queue = queue.Queue()
-
-    print("\n[INIT] Booting components...")
-
-    from src.text_emotion.analysis import load_emotion_model
-    load_emotion_model()
-
-    audio_streamer = AudioStreamer()
-    audio_streamer.add_queue(stt_audio_queue)
-    audio_streamer.add_queue(ser_audio_queue)
-
-    stt_worker = StreamingSTT(
-        audio_queue=stt_audio_queue,
-        text_queue=text_stt_queue,
-        status_queue=ui_status_queue,
-        model_size="tiny",
-        trailing_silence_seconds=1.5,
-    )
-    ser_worker = StreamingSER(audio_queue=ser_audio_queue, emotion_queue=None)
-
-    timestamp    = time.strftime("%Y-%m-%d-%H-%M-%S")
-    csv_path     = os.path.join(PROJECT_ROOT, "data", "processed",
-                                f"live_stream_{timestamp}.csv")
-    openface_exe = os.path.join(PROJECT_ROOT, "external", "openface",
-                                "OpenFace_2.2.0_win_x64", "FeatureExtraction.exe")
-    face_worker  = StreamingFace(face_queue=None, csv_path=csv_path,
-                                 openface_exe=openface_exe)
-
-    response_engine = AssistantResponseEngine()
-
-    try:
-        stt_worker.start()
-        ser_worker.start()
-        face_worker.start()
-        audio_streamer.start()
-
-        print("\n[OK] System Live! Speak and show expressions into the camera.")
-        print("Press Ctrl+C to terminate the live session...\n")
-
-        sys.stdout.write("\r[ 💤 Waiting for speech...  ]")
-        sys.stdout.flush()
-
-        while True:
-            try:
-                try:
-                    ui_state = ui_status_queue.get_nowait()
-                    if ui_state == "LISTENING":
-                        sys.stdout.write("\r[ 🎤 Listening to user...   ]")
-                    elif ui_state == "ANALYZING":
-                        sys.stdout.write("\r[ ⚙️  Analyzing speech...   ]")
-                    sys.stdout.flush()
-                except queue.Empty:
-                    pass
-
-                text        = text_stt_queue.get(timeout=0.1)
-                text_state  = build_text_state(
-                    text, analyze_text_emotion(text, threshold=0.1)
-                )
-                voice_state = ser_worker.get_current_emotion()
-                face_state  = face_worker.get_current_emotion()
-
-                process_and_print_unified_json(
-                    text_state=text_state,
-                    voice_state=voice_state,
-                    face_state=face_state,
-                    raw_text=text,
-                    voice_emo_raw=_safe_emotion(voice_state),
-                    face_emo_raw=_safe_emotion(face_state),
-                )
-
-                ser_worker.clear_buffer()
-                face_worker.clear_buffer()
-
-                sys.stdout.write("\n\n\r[ 💤 Waiting for speech...  ]")
-                sys.stdout.flush()
-
-            except queue.Empty:
-                time.sleep(0.01)
-
-    except KeyboardInterrupt:
-        print("\n\n[!] Shutting down streaming system...")
-    finally:
-        audio_streamer.stop()
-        stt_worker.stop()
-        ser_worker.stop()
-        face_worker.stop()
-        stt_worker.join(timeout=2)
-        ser_worker.join(timeout=2)
-        face_worker.join(timeout=2)
-        print("[OK] Shutdown complete.")
-
-
-if __name__ == "__main__":
-    run_live_streaming_session()
-
-
 # ════════════════════════════════════════════════════════════════════════════
-# WebSocket variant — used by routers/stream.py
+# Live streaming session — driven by routers/stream.py over a WebSocket.
+#
+# A second, near-identical CLI variant used to live here for the old terminal
+# menu. Both the menu and that duplicate were removed — this is now the single
+# orchestration path.
 # ════════════════════════════════════════════════════════════════════════════
 
 def run_live_streaming_session_ws(on_payload, stop_event, session_id=None):
@@ -244,4 +143,4 @@ def run_live_streaming_session_ws(on_payload, stop_event, session_id=None):
         stt_worker.join(timeout=2)
         ser_worker.join(timeout=2)
         face_worker.join(timeout=2)
-        print("\n[OK] WS stream shutdown complete.")
+        print("\n[OK] WS stream shutdown complete.")

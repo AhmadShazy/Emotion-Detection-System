@@ -12,6 +12,7 @@ external/openface/
 wav2vec2_checkpoints/
 external/speechbrain/
 external/faster_whisper/
+external/mediapipe/
 
 # IDE & Editor
 .vscode/
@@ -20,6 +21,9 @@ external/faster_whisper/
 # Environment configurations
 .env
 .env.*
+# ...but the template must be committed, or a fresh clone has no idea what
+# settings exist. It contains placeholders only, never real values.
+!.env.example
 
 # Logs
 *.log

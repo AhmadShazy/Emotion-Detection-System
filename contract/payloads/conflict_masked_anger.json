@@ -1,0 +1,37 @@
+{
+  "session_id": "sess-mock-conflict",
+  "user_input": {
+    "text": "It is fine, really.",
+    "timestamp": "2026-08-22T08:07:50Z"
+  },
+  "emotion_analysis": {
+    "dominant_emotion": "angry",
+    "confidence": 0.29,
+    "emotion_probabilities": {
+      "happy": 0.48,
+      "sad": 0.01,
+      "angry": 0.39,
+      "surprised": 0.01,
+      "fear": 0.01,
+      "disgust": 0.01,
+      "neutral": 0.01,
+      "empathetic": 0.01,
+      "concerned": 0.01,
+      "shame": 0.01,
+      "guilt": 0.01,
+      "anxiety": 0.01,
+      "frustration": 0.01,
+      "joy": 0.01,
+      "calm": 0.01
+    }
+  },
+  "tone_analysis": {
+    "tone": "hostile",
+    "confidence": 0.82
+  },
+  "conflict_analysis": {
+    "detected": true,
+    "type": "masked_anger",
+    "details": "Face appears happy but voice indicates anger."
+  }
+}
