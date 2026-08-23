@@ -248,18 +248,20 @@ else:
                     "duration": round(turn["duration"], 1),
                 })
 
-                pending = loop.create_task(
-                    asyncio.wrap_future(
-                        _get_executor().submit(
-                            analyze_turn,
-                            turn["audio"],
-                            turn["video"],
-                            session.session_id,
-                        )
-                    )
+                # run_in_executor returns an asyncio Future that is already
+                # bound to this loop. Wrapping it in create_task() is wrong —
+                # create_task wants a coroutine, and passing a Future raises
+                # "a coroutine was expected", which killed the connection the
+                # instant the first turn completed.
+                pending = loop.run_in_executor(
+                    _get_executor(),
+                    analyze_turn,
+                    turn["audio"],
+                    turn["video"],
+                    session.session_id,
                 )
                 pending.add_done_callback(
-                    lambda t: loop.create_task(send_payload(t))
+                    lambda f: loop.create_task(send_payload(f))
                 )
 
         except WebSocketDisconnect:

@@ -184,6 +184,11 @@ const multimodalTimer     = document.getElementById('multimodal-timer');
 const timerDisplay        = document.getElementById('timer-display');
 const cameraPreview       = document.getElementById('camera-preview');
 const cameraPlaceholder   = document.getElementById('camera-placeholder');
+// The Live Call tab has its own preview elements. It must NOT reuse the ones
+// above: those live inside the Multimodal pane, which is hidden while the Live
+// tab is showing, so the video would render into something invisible.
+const streamCameraPreview     = document.getElementById('stream-camera-preview');
+const streamCameraPlaceholder = document.getElementById('stream-camera-placeholder');
 const multimodalStatus    = document.getElementById('multimodal-status');
 const btnConnectStream    = document.getElementById('btn-connect-stream');
 const btnDisconnectStream = document.getElementById('btn-disconnect-stream');
@@ -867,11 +872,11 @@ async function teardownLiveCapture() {
         try { liveVideoEl.pause(); liveVideoEl.srcObject = null; } catch (_) {}
         liveVideoEl = null;
     }
-    if (cameraPreview) {
-        cameraPreview.srcObject     = null;
-        cameraPreview.style.display = 'none';
+    if (streamCameraPreview) {
+        streamCameraPreview.srcObject     = null;
+        streamCameraPreview.style.display = 'none';
     }
-    if (cameraPlaceholder) cameraPlaceholder.style.display = 'flex';
+    if (streamCameraPlaceholder) streamCameraPlaceholder.style.display = 'flex';
     liveCanvas = null;
     stopStreamMicMonitor();
 }
@@ -908,11 +913,11 @@ async function startLiveCapture() {
     });
 
     // -- Preview + mic meter --------------------------------------------------
-    if (cameraPreview) {
-        cameraPreview.srcObject     = liveStream;
-        cameraPreview.style.display = 'block';
-        if (cameraPlaceholder) cameraPlaceholder.style.display = 'none';
-        cameraPreview.play().catch(() => {});
+    if (streamCameraPreview) {
+        streamCameraPreview.srcObject     = liveStream;
+        streamCameraPreview.style.display = 'block';
+        if (streamCameraPlaceholder) streamCameraPlaceholder.style.display = 'none';
+        streamCameraPreview.play().catch(() => {});
     }
     if (streamMicLevel && micLevelWrapper) {
         micLevelWrapper.style.display = 'flex';

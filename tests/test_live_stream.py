@@ -287,3 +287,71 @@ def test_trailing_silence_is_trimmed_before_analysis():
     assert turns[0]["duration"] < 3.0, (
         f"trailing silence was not trimmed: {turns[0]['duration']}s"
     )
+
+
+@pytest.mark.live
+def test_completed_turn_is_delivered_over_the_socket():
+    """
+    Streams enough real speech to close a turn and asserts a payload comes BACK.
+
+    This is the gap that let a crash reach the user: the existing socket test
+    only checked the handshake, so scheduling the analysis wrong
+    (`create_task` on a Future -> "a coroutine was expected") killed the
+    connection the instant the first turn completed, and no test noticed.
+    The analysis itself ran fine — only the delivery was broken, which is
+    exactly the kind of fault a handshake-only test cannot see.
+    """
+    import glob
+    import soundfile as sf
+    from fastapi.testclient import TestClient
+    from src.core.config import API_KEYS, TEXT_ONLY_MODE
+    import api
+
+    if TEXT_ONLY_MODE:
+        pytest.skip("live stream is disabled in text-only mode")
+
+    # A recording with real, audible speech.
+    candidates = sorted(glob.glob("data/recordings/voice_analysis_*.wav"))
+    if not candidates:
+        pytest.skip("no speech recording available to stream")
+
+    audio, sr = sf.read(candidates[0])
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    audio = audio.astype(np.float32)
+    if sr != 16000:
+        pytest.skip(f"recording is {sr} Hz, expected 16000")
+
+    # Trailing silence so the turn closes NATURALLY, mid-stream. This is the
+    # important part: hanging up takes a different code path (flush), and a
+    # test that only hangs up cannot see a fault in normal turn completion —
+    # which is exactly how the "a coroutine was expected" crash reached a user.
+    audio = np.concatenate([audio, _silence(2.5, noise=0.0005)])
+
+    key = next(iter(API_KEYS)) if API_KEYS else ""
+    packet = 2048
+
+    with TestClient(api.app) as client:
+        with client.websocket_connect(f"/ws/stream?api_key={key}") as ws:
+            assert ws.receive_json()["code"] == "CONNECTED"
+
+            for i in range(0, len(audio), packet):
+                chunk = audio[i:i + packet]
+                pcm = (np.clip(chunk, -1, 1) * 32767).astype("<i2").tobytes()
+                ws.send_bytes(bytes([0x01]) + pcm)
+
+            # Do NOT send "stop" — the payload must arrive from the turn
+            # closing on its own.
+            payload = None
+            for _ in range(10):
+                message = ws.receive_json()
+                if message.get("session_id"):
+                    payload = message
+                    break
+
+            assert payload is not None, (
+                "no payload was delivered after a turn closed on trailing "
+                "silence — the socket carried status frames but never a result"
+            )
+            assert payload["emotion_analysis"]["dominant_emotion"]
+            assert "conflict_analysis" in payload
