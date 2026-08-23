@@ -51,7 +51,8 @@ def _env_bool(name: str, default: bool = False) -> bool:
 # ── Mode ──────────────────────────────────────────────────────────────────────
 # true  → only /analyze/text and /mock/* are served, and only RoBERTa is loaded.
 #         Suitable for a small hosted instance the LLM team can build against.
-# false → every mode, all four models. Needs a microphone, a camera and OpenFace.
+# false → every mode, all four models. Media comes from the browser, so the
+#         server needs no microphone, no camera and no OpenFace binary.
 TEXT_ONLY_MODE: bool = _env_bool("TEXT_ONLY_MODE", False)
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
