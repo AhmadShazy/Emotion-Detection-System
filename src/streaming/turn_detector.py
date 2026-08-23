@@ -37,10 +37,17 @@ SAMPLE_RATE = 16000
 FRAME_SAMPLES = 320            # 20 ms @ 16 kHz
 
 # ── Turn shape ────────────────────────────────────────────────────────────────
-# How much trailing silence ends a turn. 1.5s is what live_orchestrator.py used
-# and it feels right in conversation — long enough to survive a mid-sentence
-# breath, short enough not to feel unresponsive.
-TRAILING_SILENCE_SECONDS = 1.5
+# How much trailing silence ends a turn.
+#
+# This is pure perceived latency: the caller has finished speaking and is
+# waiting, but analysis cannot start until we are confident they actually
+# stopped rather than drawing breath. The old value was 1.5s, which on top of
+# ~3-4s of inference made the wait feel long.
+#
+# 0.9s still comfortably exceeds a normal inter-word pause (typically
+# 0.15-0.4s) while returning ~0.6s to the caller on every single turn. Raise it
+# if turns start cutting mid-sentence for slower speakers.
+TRAILING_SILENCE_SECONDS = 0.9
 
 # Ignore anything shorter than this; it is a cough, a click, or a door.
 MIN_TURN_SECONDS = 0.7

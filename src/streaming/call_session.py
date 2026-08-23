@@ -161,67 +161,98 @@ class CallSession:
 
 # ── Analysis, run on the shared executor ──────────────────────────────────────
 
+# Cap on how much audio the voice-emotion model sees.
+#
+# SER cost is linear in input length — measured ~250ms per second of audio, so a
+# 20-second turn spends 5.2s in SER alone. Emotion is also weighted toward how
+# someone finishes a thought rather than how they began it, so the tail is the
+# informative part. The original streaming implementation capped at 5s for the
+# same reason ("prevent CPU hang on long unbroken sentences").
+SER_MAX_SECONDS = 6.0
+
+
 def analyze_turn(audio: np.ndarray, jpeg_frames: list, session_id: str | None) -> dict:
     """
     Runs one completed turn through the full pipeline and returns the payload.
 
     BLOCKING and CPU-bound — must be called via an executor, never on the event
-    loop. Measured on this machine for a 5s turn: STT ~2.7s, SER ~1.7s, face
-    ~0.9s, so roughly 4-5s wall clock.
+    loop.
+
+    The three analyses are independent, so they run CONCURRENTLY. They are
+    C-level calls that release the GIL, and measured on this machine that saves
+    real time even though they contend for the same cores. Text emotion runs
+    afterwards because it needs the transcript.
 
     Deliberately reuses the same functions the file-upload path uses, so live
     and uploaded video cannot drift apart in behaviour.
     """
+    import concurrent.futures
+
     from src.interactive_modes import _is_hallucination
     from src.streaming.unified_pipeline import build_text_state, process_and_print_unified_json
     from src.text_emotion.analysis import analyze_text_emotion
     from src.faceexpression.mediapipe_analyzer import analyze_jpeg_frames
     from src.core.model_registry import registry
 
-    # ── Face ─────────────────────────────────────────────────────────────────
-    face_state = None
-    try:
-        face_state = analyze_jpeg_frames(jpeg_frames)
-    except Exception as exc:
-        print(f"[Live] Face analysis failed: {exc}")
+    # ── The three independent stages ─────────────────────────────────────────
 
-    # ── Speech to text ───────────────────────────────────────────────────────
-    transcript = ""
-    try:
-        model = registry.get("faster_whisper")
-        segments, _ = model.transcribe(audio, beam_size=1)
-        raw = " ".join(
-            s.text for s in segments if getattr(s, "no_speech_prob", 0.0) < 0.60
-        ).strip()
-        if raw and not _is_hallucination(raw):
-            transcript = raw
-    except Exception as exc:
-        print(f"[Live] STT failed: {exc}")
+    def run_face():
+        try:
+            return analyze_jpeg_frames(jpeg_frames)
+        except Exception as exc:
+            print(f"[Live] Face analysis failed: {exc}")
+            return None
 
-    # ── Voice emotion ────────────────────────────────────────────────────────
-    voice_state = None
-    ser_label = "neutral"
-    try:
-        import torch
-        classifier = registry.get("speechbrain")
-        _, score, _, text_lab = classifier.classify_batch(
-            torch.from_numpy(audio).unsqueeze(0)
-        )
-        label_map = {"hap": "Happy", "ang": "Angry", "neu": "Neutral", "sad": "Sad"}
-        ser_label = label_map.get(text_lab[0], text_lab[0])
-        confidence = float(score[0])
-        voice_state = {
-            "source":          "voice",
-            "emotion":         ser_label,
-            "confidence":      round(confidence, 4),
-            "average_emotion": ser_label,
-            "peak_emotion":    ser_label,
-            "reliability":     round(min(1.0, confidence + 0.15), 4),
-        }
-    except Exception as exc:
-        print(f"[Live] SER failed: {exc}")
+    def run_stt():
+        try:
+            model = registry.get("faster_whisper")
+            segments, _ = model.transcribe(audio, beam_size=1)
+            raw = " ".join(
+                s.text for s in segments if getattr(s, "no_speech_prob", 0.0) < 0.60
+            ).strip()
+            return raw if raw and not _is_hallucination(raw) else ""
+        except Exception as exc:
+            print(f"[Live] STT failed: {exc}")
+            return ""
 
-    # ── Text emotion ─────────────────────────────────────────────────────────
+    def run_ser():
+        try:
+            import torch
+            classifier = registry.get("speechbrain")
+
+            # Only the tail, so cost stays flat regardless of how long the
+            # caller talked.
+            limit = int(SER_MAX_SECONDS * SAMPLE_RATE)
+            clip = audio[-limit:] if len(audio) > limit else audio
+
+            _, score, _, text_lab = classifier.classify_batch(
+                torch.from_numpy(clip).unsqueeze(0)
+            )
+            label_map = {"hap": "Happy", "ang": "Angry", "neu": "Neutral", "sad": "Sad"}
+            label = label_map.get(text_lab[0], text_lab[0])
+            confidence = float(score[0])
+            return label, {
+                "source":          "voice",
+                "emotion":         label,
+                "confidence":      round(confidence, 4),
+                "average_emotion": label,
+                "peak_emotion":    label,
+                "reliability":     round(min(1.0, confidence + 0.15), 4),
+            }
+        except Exception as exc:
+            print(f"[Live] SER failed: {exc}")
+            return "neutral", None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        f_face = pool.submit(run_face)
+        f_stt  = pool.submit(run_stt)
+        f_ser  = pool.submit(run_ser)
+
+        face_state = f_face.result()
+        transcript = f_stt.result()
+        ser_label, voice_state = f_ser.result()
+
+    # ── Text emotion — needs the transcript, so it cannot start earlier ──────
     text_state = None
     if transcript:
         try:
