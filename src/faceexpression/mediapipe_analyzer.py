@@ -56,6 +56,21 @@ AU_BLENDSHAPES = {
 # there is real footage to tune against.
 THRESHOLD = 0.35
 
+# How much REAL TIME the per-frame smoothing vote covers.
+#
+# Expressed in seconds rather than frames on purpose. The two callers sample at
+# different rates — uploads at 5fps, live calls at ~3fps — so a fixed frame
+# count would mean they smoothed over different durations, and the same footage
+# would read differently depending on which path it arrived through. They
+# previously used 10 and 5 frames, which happened to land near each other in
+# time by coincidence rather than design.
+SMOOTHING_SECONDS = 2.0
+
+
+def _smoothing_window(fps: float) -> int:
+    """Frames needed to cover SMOOTHING_SECONDS at the given sample rate."""
+    return max(1, round(SMOOTHING_SECONDS * fps))
+
 MODEL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "external", "mediapipe", "face_landmarker.task",
@@ -80,7 +95,7 @@ MODEL_PATH = os.path.join(
 # Building an instance is cheap (~90ms, 3.8MB bundle), so the pool is created
 # lazily on first use rather than at import.
 
-POOL_SIZE = int(os.environ.get("FACE_POOL_WORKERS", "2"))
+from src.core.config import FACE_POOL_WORKERS as POOL_SIZE
 
 _pool: "queue.Queue" = None
 _pool_lock = threading.Lock()
@@ -239,7 +254,8 @@ def analyze_frames(frame_paths: list) -> tuple:
     if not emotions:
         return ("No face detected in any frame.", None)
 
-    smoothed = _smooth(emotions, window=10)
+    from src.video.ingest import FRAME_SAMPLE_FPS
+    smoothed = _smooth(emotions, window=_smoothing_window(FRAME_SAMPLE_FPS))
 
     from collections import Counter
     counts = Counter(smoothed)
@@ -359,7 +375,10 @@ def analyze_jpeg_frames(jpeg_frames: list) -> dict | None:
     if not emotions:
         return None
 
-    smoothed = _smooth(emotions, window=5)
+    # The browser sends video at LIVE_VIDEO_FPS; smoothing covers the same real
+    # duration here as it does on the upload path.
+    from src.core.config import LIVE_VIDEO_FPS
+    smoothed = _smooth(emotions, window=_smoothing_window(LIVE_VIDEO_FPS))
     counts = Counter(smoothed)
     dominant, top_count = counts.most_common(1)[0]
 

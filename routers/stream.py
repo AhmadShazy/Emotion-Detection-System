@@ -73,13 +73,13 @@ else:
     # saturate cores individually; running many concurrently measured SLOWER
     # than running them one after another, so extra workers would buy negative
     # throughput while multiplying latency.
-    INFERENCE_WORKERS = int(os.environ.get("INFERENCE_WORKERS", "2"))
+    from src.core.config import INFERENCE_WORKERS
     _executor: concurrent.futures.ThreadPoolExecutor | None = None
 
     # Refuse calls the machine cannot actually serve. A 5s turn costs ~4-5s of
     # CPU, so the honest capacity here is small — telling someone the server is
     # busy beats accepting them and delivering minute-long latency.
-    MAX_ACTIVE_CALLS = int(os.environ.get("MAX_ACTIVE_CALLS", "2"))
+    from src.core.config import MAX_ACTIVE_CALLS, LIVE_VIDEO_FPS
     _active_calls = 0
     _active_lock = asyncio.Lock()
 
@@ -133,7 +133,10 @@ else:
                 "sample_rate":   16000,
                 "audio_format":  "pcm_s16le",
                 "video_format":  "jpeg",
-                "target_fps":    3,
+                # The server owns this. The browser used to hardcode its own
+                # rate, so the two could disagree and the face smoothing would
+                # silently cover the wrong duration.
+                "target_fps":    LIVE_VIDEO_FPS,
             },
         })
 

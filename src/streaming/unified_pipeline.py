@@ -16,6 +16,7 @@ import datetime
 import threading
 import time
 
+from src.core.config import LOG_PAYLOADS
 from src.streaming.emotion_state_manager import EmotionStateManager
 from src.streaming.llm_adapter import LLMAdapter
 
@@ -95,6 +96,35 @@ _expiry_thread.start()
 
 # ── Text state builder ────────────────────────────────────────────────────────
 
+def build_voice_state(emotion: str, confidence: float) -> dict | None:
+    """
+    Builds the voice modality dict the fusion engine consumes.
+
+    Shared by every path that runs speech emotion recognition. It existed in two
+    places before — once for the upload paths and once for the live call — with
+    the reliability formula written out separately in each. Identical today, but
+    that is exactly the shape of thing that drifts: a tweak in one copy silently
+    makes the same audio score differently depending on which mode it arrived
+    through.
+
+    The +0.15 reliability boost is deliberate: SpeechBrain's top-class softmax
+    sits around 0.6-0.8 even on clean speech, so using it raw would understate
+    how much the voice signal deserves to count.
+    """
+    if not emotion or emotion == "N/A":
+        return None
+
+    reliability = min(1.0, confidence + 0.15)
+    return {
+        "source":          "voice",
+        "emotion":         emotion,
+        "confidence":      round(confidence, 4),
+        "average_emotion": emotion,
+        "peak_emotion":    emotion,
+        "reliability":     round(reliability, 4),
+    }
+
+
 def build_text_state(text: str, te_results: list) -> dict | None:
     if not text or text == "N/A":
         return None
@@ -171,11 +201,22 @@ def process_and_print_unified_json(
         )
 
     # ── 5. Server-side log ────────────────────────────────────────────────────
-    print("\n" + "=" * 80)
-    print(">>> OUTBOUND V2 PAYLOAD")
-    print("=" * 80)
-    print(json.dumps(payload, indent=2))
-    print("=" * 80)
+    # One line by default. The full payload contains the user's transcribed
+    # speech, so dumping it on every request writes what people said into the
+    # server log — fine on a laptop, wrong for a hosted service. Set
+    # LOG_PAYLOADS=true to get the full dump back while developing.
+    emotion = payload["emotion_analysis"]
+    conflict = payload.get("conflict_analysis", {})
+    print(
+        f"[Payload] session={payload['session_id']} "
+        f"emotion={emotion['dominant_emotion']} "
+        f"conf={emotion['confidence']} "
+        f"tone={payload['tone_analysis']['tone']}"
+        + (f" conflict={conflict['type']}" if conflict.get("detected") else "")
+    )
+
+    if LOG_PAYLOADS:
+        print(json.dumps(payload, indent=2))
 
     # ── 6. Optional WebSocket push ────────────────────────────────────────────
     if on_payload is not None:

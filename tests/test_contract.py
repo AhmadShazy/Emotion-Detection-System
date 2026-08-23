@@ -311,3 +311,80 @@ def test_live_session_continuity():
             "Confidence did not rise across repeated turns — temporal smoothing "
             "is not accumulating."
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Cross-path consistency
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_voice_state_is_built_in_exactly_one_place():
+    """
+    The upload paths and the live call must agree on how SER confidence becomes
+    the reliability the fusion engine weights by.
+
+    They each had their own copy of the formula. Identical at the time, but that
+    is precisely the shape of thing that drifts — tweak one and the same audio
+    scores differently depending on which mode it arrived through.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "grep", "-n", "confidence + 0.15", "--", "src/"],
+        capture_output=True, text=True, cwd=PROJECT_ROOT,
+    )
+    hits = [ln for ln in result.stdout.splitlines() if ln.strip()]
+
+    assert len(hits) == 1, (
+        "The SER reliability formula should exist in exactly one place "
+        f"(unified_pipeline.build_voice_state). Found {len(hits)}:\n"
+        + "\n".join(hits)
+    )
+    assert "unified_pipeline" in hits[0], f"unexpected location: {hits[0]}"
+
+
+def test_silence_threshold_is_shared_between_paths():
+    """
+    Upload and live must agree on what counts as too quiet to be speech.
+
+    /analyze/voice turns this into a hard 422, so a mismatch means the same
+    quiet recording is rejected on one path and analysed on the other. Five of
+    the eighteen recordings in data/recordings/ sit below the old hardcoded
+    0.01, so this was not hypothetical.
+    """
+    import inspect
+    from src.interactive_modes import _check_audio_has_speech
+    from src.streaming.turn_detector import MIN_ABSOLUTE_THRESHOLD
+
+    source = inspect.getsource(_check_audio_has_speech)
+    assert "MIN_ABSOLUTE_THRESHOLD" in source, (
+        "_check_audio_has_speech should use the live path's shared floor "
+        "rather than its own hardcoded threshold"
+    )
+    assert MIN_ABSOLUTE_THRESHOLD < 0.01, (
+        "the shared floor should be below the old 0.01, which rejected quiet "
+        "but perfectly real speech"
+    )
+
+
+def test_config_is_the_only_module_reading_the_environment():
+    """
+    src/core/config.py documents itself as the single place environment
+    variables are read. Capacity settings had leaked into a router and into the
+    face analyzer, so tuning the system meant hunting through three files.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "grep", "-n", "-E", r"os\.environ|os\.getenv", "--",
+         "src/", "routers/", "api.py"],
+        capture_output=True, text=True, cwd=PROJECT_ROOT,
+    )
+    offenders = [
+        ln for ln in result.stdout.splitlines()
+        if ln.strip() and "src/core/config.py" not in ln.replace("\\", "/")
+    ]
+
+    assert not offenders, (
+        "Only src/core/config.py should read the environment. Found:\n"
+        + "\n".join(offenders)
+    )

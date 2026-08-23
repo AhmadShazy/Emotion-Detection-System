@@ -189,7 +189,9 @@ def analyze_turn(audio: np.ndarray, jpeg_frames: list, session_id: str | None) -
     import concurrent.futures
 
     from src.interactive_modes import _is_hallucination
-    from src.streaming.unified_pipeline import build_text_state, process_and_print_unified_json
+    from src.streaming.unified_pipeline import (
+        build_text_state, build_voice_state, process_and_print_unified_json,
+    )
     from src.text_emotion.analysis import analyze_text_emotion
     from src.faceexpression.mediapipe_analyzer import analyze_jpeg_frames
     from src.core.model_registry import registry
@@ -231,14 +233,9 @@ def analyze_turn(audio: np.ndarray, jpeg_frames: list, session_id: str | None) -
             label_map = {"hap": "Happy", "ang": "Angry", "neu": "Neutral", "sad": "Sad"}
             label = label_map.get(text_lab[0], text_lab[0])
             confidence = float(score[0])
-            return label, {
-                "source":          "voice",
-                "emotion":         label,
-                "confidence":      round(confidence, 4),
-                "average_emotion": label,
-                "peak_emotion":    label,
-                "reliability":     round(min(1.0, confidence + 0.15), 4),
-            }
+            # Shared builder, so this path and the upload paths cannot disagree
+            # about how confidence becomes reliability.
+            return label, build_voice_state(label, confidence)
         except Exception as exc:
             print(f"[Live] SER failed: {exc}")
             return "neutral", None

@@ -28,7 +28,7 @@ except ImportError:
     def analyze_text_emotion(text, threshold=0.1): return []
     def load_emotion_model(): return None
 
-from src.streaming.unified_pipeline import build_text_state
+from src.streaming.unified_pipeline import build_text_state, build_voice_state
 
 
 # ── Whisper hallucination patterns ────────────────────────────────────────────
@@ -64,16 +64,27 @@ def _is_hallucination(text: str) -> bool:
 
 def _check_audio_has_speech(
     wav_path: str,
-    silence_threshold: float = 0.01,
+    silence_threshold: float = None,
 ) -> bool:
     """
-    Quick RMS energy check on a WAV file before sending to Whisper.
+    Quick RMS energy check on a WAV file before sending it to Whisper.
     Returns False if the file is silent or near-silent.
 
     Prevents:
         1. Whisper hallucinating "..." on silence
-        2. SER detecting "angry" from mic background noise
+        2. SER reading "angry" out of microphone background noise
+
+    The threshold is the SAME constant the live call uses as its absolute
+    floor. It used to be a separate hardcoded 0.01 here, which meant the two
+    paths disagreed about what counts as silence: measuring the recordings in
+    data/recordings/, five of eighteen sit entirely below 0.01, so the same
+    quiet speech was rejected outright with a 422 on this path while the live
+    call analysed it fine.
     """
+    if silence_threshold is None:
+        from src.streaming.turn_detector import MIN_ABSOLUTE_THRESHOLD
+        silence_threshold = MIN_ABSOLUTE_THRESHOLD
+
     try:
         import soundfile as sf
         data, sr = sf.read(wav_path)
@@ -83,7 +94,7 @@ def _check_audio_has_speech(
         rms = np.sqrt(np.mean(data ** 2))
         return rms > silence_threshold
     except Exception:
-        # If check fails for any reason let Whisper try anyway
+        # If the check fails for any reason, let Whisper try anyway.
         return True
 
 
@@ -175,21 +186,12 @@ def process_voice_pipeline(wav_path: str):
             print(f"[VoicePipeline] Text emotion failed: {e}")
 
     # ── Voice State ───────────────────────────────────────────────────────────
-    # Reliability: derived from real confidence — low confidence = less reliable.
-    # Capped at 1.0. A small boost (+0.15) is applied because SpeechBrain's
-    # top-class softmax scores often sit around 0.6–0.8 on clean speech.
-    voice_state = None
-    if ser_result and ser_result != "N/A":
-        reliability = min(1.0, ser_confidence + 0.15)
-        voice_state = {
-            "source":          "voice",
-            "emotion":         ser_result,
-            "confidence":      round(ser_confidence, 4),
-            "average_emotion": ser_result,
-            "peak_emotion":    ser_result,
-            "reliability":     round(reliability, 4),
-        }
+    # Built by the shared helper so the upload paths and the live call cannot
+    # drift apart on how confidence becomes reliability.
+    voice_state = build_voice_state(ser_result, ser_confidence)
+    if voice_state:
         print(f"[VoicePipeline] voice_state → emotion={ser_result}, "
-              f"conf={ser_confidence:.3f}, reliability={reliability:.3f}")
+              f"conf={ser_confidence:.3f}, "
+              f"reliability={voice_state['reliability']}")
 
     return text_state, voice_state, stt_result, ser_result

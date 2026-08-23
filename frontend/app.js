@@ -830,9 +830,13 @@ if (btnAnalyzeVideo) {
 const MSG_AUDIO = 0x01;
 const MSG_VIDEO = 0x02;
 
-// Frames per second sent to the server. The face reading is a majority vote
-// over the whole turn, so more frames add cost without changing the answer.
-const VIDEO_FPS = 3;
+// Frames per second sent to the server.
+//
+// The SERVER decides this and announces it in the handshake — it smooths face
+// results against this rate, so if the two sides disagreed it would silently
+// average over the wrong span of time. This is only the fallback used if the
+// handshake somehow arrives without it.
+let VIDEO_FPS = 3;
 
 let ws               = null;
 let liveStream       = null;   // the MediaStream from getUserMedia
@@ -840,6 +844,7 @@ let liveAudioCtx     = null;
 let liveWorkletNode  = null;
 let liveVideoTimer   = null;
 let liveCanvas       = null;
+let liveCtx2d        = null;
 let liveVideoEl      = null;
 let liveMicStopFn    = null;
 
@@ -878,6 +883,7 @@ async function teardownLiveCapture() {
     }
     if (streamCameraPlaceholder) streamCameraPlaceholder.style.display = 'flex';
     liveCanvas = null;
+    liveCtx2d = null;
     stopStreamMicMonitor();
 }
 
@@ -964,11 +970,22 @@ async function startLiveCapture() {
     liveCanvas.height = 360;
     const ctx2d = liveCanvas.getContext('2d');
 
+    liveCtx2d = ctx2d;
+    // The timer is NOT started here. It starts once the server has told us the
+    // rate it expects, in startVideoSending() below.
+}
+
+// Begins sending frames at the rate the SERVER asked for.
+function startVideoSending(fps) {
+    if (liveVideoTimer) clearInterval(liveVideoTimer);
+    if (fps && fps > 0) VIDEO_FPS = fps;
+
     liveVideoTimer = setInterval(() => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         if (!liveVideoEl || liveVideoEl.readyState < 2) return;
+        if (!liveCanvas || !liveCtx2d) return;
 
-        ctx2d.drawImage(liveVideoEl, 0, 0, liveCanvas.width, liveCanvas.height);
+        liveCtx2d.drawImage(liveVideoEl, 0, 0, liveCanvas.width, liveCanvas.height);
         liveCanvas.toBlob(async (blob) => {
             if (!blob || !ws || ws.readyState !== WebSocket.OPEN) return;
             const buf = new Uint8Array(await blob.arrayBuffer());
@@ -1028,6 +1045,11 @@ btnConnectStream.addEventListener('click', async () => {
         }
 
         if (data.type === 'status') {
+            if (data.code === 'CONNECTED') {
+                // The server owns the frame rate; follow what it asked for.
+                startVideoSending(data.config && data.config.target_fps);
+            }
+
             const messages = {
                 CONNECTED:     'Live - start speaking',
                 ANALYZING:     'Analysing your turn...',

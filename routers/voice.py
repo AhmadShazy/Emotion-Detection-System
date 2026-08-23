@@ -28,6 +28,7 @@ if TEXT_ONLY_MODE:
         )
 else:
     from src.interactive_modes import process_voice_pipeline, _check_audio_has_speech, _is_hallucination
+    from src.video.ingest import ensure_16k_mono
     from src.streaming.unified_pipeline import process_and_print_unified_json
 
     _UPLOAD_DIR   = os.path.join(PROJECT_ROOT, "data", "recordings")
@@ -71,11 +72,23 @@ else:
             with open(wav_path, "wb") as f:
                 f.write(audio_bytes)
 
+            # ── Normalise to 16 kHz mono ────────────────────────────────────
+            # This route accepts any .wav a user can produce, and SpeechBrain
+            # expects 16 kHz. Nothing downstream resamples, and handing
+            # wav2vec2 the wrong rate does not raise — it returns a CONFIDENT
+            # WRONG label, which is the worst possible failure. The video and
+            # live paths already guarantee 16 kHz (ffmpeg -ar / the browser's
+            # AudioContext); this one did not.
+            wav_path = await asyncio.to_thread(ensure_16k_mono, wav_path)
+
             has_speech = await asyncio.to_thread(_check_audio_has_speech, wav_path)
             if not has_speech:
                 raise HTTPException(
                     status_code=422,
-                    detail="No speech detected in the recording.",
+                    detail=(
+                        "No speech was detected in that recording. Check your "
+                        "microphone is working and try speaking a little louder."
+                    ),
                 )
 
             def _run():
