@@ -116,23 +116,33 @@ def process_voice_pipeline(wav_path: str):
     if not SEREngine or not wav_path or not os.path.exists(wav_path):
         return None, None, "N/A", "N/A"
 
-    # ── Step 1: SER ───────────────────────────────────────────────────────────
-    ser_result     = "N/A"
-    ser_confidence = 0.0   # safe default — overwritten on success
-    try:
-        engine                  = SEREngine()
-        ser_result, ser_confidence = engine.predict_emotion(wav_path)
-        print(f"[VoicePipeline] SER: {ser_result} (conf={ser_confidence:.3f})")
-    except Exception as e:
-        print(f"[VoicePipeline] SER failed: {e}")
+    import concurrent.futures
 
-    # ── Step 2: Pre-check audio energy before Whisper ─────────────────────────
-    stt_result = "N/A"
+    # ── SER and STT run CONCURRENTLY ─────────────────────────────────────────
+    # They read the same file and share nothing, so ordering never mattered —
+    # it was only ever sequential by accident of how the code was written.
+    # Both are C-level calls that release the GIL, so this is a real saving.
+    #
+    # This is purely a scheduling change: identical inputs, identical models,
+    # identical outputs. Verified by comparing results before and after across
+    # the recordings in data/recordings/.
 
-    if not _check_audio_has_speech(wav_path):
-        print("[VoicePipeline] ⚠️  Audio appears silent — skipping Whisper.")
-    else:
-        # ── Step 3: Whisper STT ───────────────────────────────────────────────
+    def _run_ser():
+        try:
+            engine = SEREngine()
+            label, confidence = engine.predict_emotion(wav_path)
+            print(f"[VoicePipeline] SER: {label} (conf={confidence:.3f})")
+            return label, confidence
+        except Exception as e:
+            print(f"[VoicePipeline] SER failed: {e}")
+            return "N/A", 0.0
+
+    def _run_stt():
+        # The silence gate stays INSIDE this branch so it still runs before
+        # Whisper — it exists to stop Whisper hallucinating on silence.
+        if not _check_audio_has_speech(wav_path):
+            print("[VoicePipeline] ⚠️  Audio appears silent — skipping Whisper.")
+            return "N/A"
         try:
             from src.core.model_registry import registry
             model         = registry.get("whisper")
@@ -141,13 +151,19 @@ def process_voice_pipeline(wav_path: str):
 
             if _is_hallucination(raw_text):
                 print(f"[VoicePipeline] ⚠️  Hallucination filtered: '{raw_text}'")
-                stt_result = "N/A"
-            else:
-                stt_result = raw_text
-                print(f"[VoicePipeline] STT: '{stt_result}'")
+                return "N/A"
 
+            print(f"[VoicePipeline] STT: '{raw_text}'")
+            return raw_text
         except Exception as e:
             print(f"[VoicePipeline] STT failed: {e}")
+            return "N/A"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        f_ser = pool.submit(_run_ser)
+        f_stt = pool.submit(_run_stt)
+        ser_result, ser_confidence = f_ser.result()
+        stt_result = f_stt.result()
 
     # ── Step 4: Text Emotion ──────────────────────────────────────────────────
     text_state = None
