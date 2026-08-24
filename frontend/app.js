@@ -184,6 +184,11 @@ const multimodalTimer     = document.getElementById('multimodal-timer');
 const timerDisplay        = document.getElementById('timer-display');
 const cameraPreview       = document.getElementById('camera-preview');
 const cameraPlaceholder   = document.getElementById('camera-placeholder');
+// The Live Call tab has its own preview elements. It must NOT reuse the ones
+// above: those live inside the Multimodal pane, which is hidden while the Live
+// tab is showing, so the video would render into something invisible.
+const streamCameraPreview     = document.getElementById('stream-camera-preview');
+const streamCameraPlaceholder = document.getElementById('stream-camera-placeholder');
 const multimodalStatus    = document.getElementById('multimodal-status');
 const btnConnectStream    = document.getElementById('btn-connect-stream');
 const btnDisconnectStream = document.getElementById('btn-disconnect-stream');
@@ -810,25 +815,89 @@ if (btnAnalyzeVideo) {
 }
 
 // ============================================================================
-// Option 4: Live Stream (WebSocket)
+// Option 4: Live Call (WebSocket)
 // ============================================================================
-let ws              = null;
-let streamMicStream = null;
-let streamMicStopFn = null;
+// The browser captures mic + camera and STREAMS them to the server. Previously
+// this tab opened getUserMedia purely to animate a level meter while the SERVER
+// recorded from its own microphone - so it only ever worked for one person,
+// sitting at the machine running the server.
+//
+// Wire protocol, matching routers/stream.py:
+//   binary  0x01 + Int16LE PCM @ 16 kHz mono
+//   binary  0x02 + JPEG bytes
+//   text    JSON control both ways
+
+const MSG_AUDIO = 0x01;
+const MSG_VIDEO = 0x02;
+
+// Frames per second sent to the server.
+//
+// The SERVER decides this and announces it in the handshake — it smooths face
+// results against this rate, so if the two sides disagreed it would silently
+// average over the wrong span of time. This is only the fallback used if the
+// handshake somehow arrives without it.
+let VIDEO_FPS = 3;
+
+let ws               = null;
+let liveStream       = null;   // the MediaStream from getUserMedia
+let liveAudioCtx     = null;
+let liveWorkletNode  = null;
+let liveVideoTimer   = null;
+let liveCanvas       = null;
+let liveCtx2d        = null;
+let liveVideoEl      = null;
+let liveMicStopFn    = null;
+
+function setStreamStatus(text) {
+    if (streamStatusText) streamStatusText.textContent = text;
+}
 
 function stopStreamMicMonitor() {
-    if (streamMicStopFn) { streamMicStopFn(); streamMicStopFn = null; }
-    if (streamMicStream) {
-        streamMicStream.getTracks().forEach(t => t.stop());
-        streamMicStream = null;
-    }
+    if (liveMicStopFn) { liveMicStopFn(); liveMicStopFn = null; }
     if (streamMicLevel)  streamMicLevel.style.width = '0%';
     if (micLevelWrapper) micLevelWrapper.style.display = 'none';
 }
 
-function disconnectWebSocket() {
-    if (ws) { ws.close(); ws = null; }
+async function teardownLiveCapture() {
+    if (liveVideoTimer) { clearInterval(liveVideoTimer); liveVideoTimer = null; }
+
+    if (liveWorkletNode) {
+        try { liveWorkletNode.port.onmessage = null; liveWorkletNode.disconnect(); } catch (_) {}
+        liveWorkletNode = null;
+    }
+    if (liveAudioCtx) {
+        try { await liveAudioCtx.close(); } catch (_) {}
+        liveAudioCtx = null;
+    }
+    if (liveStream) {
+        liveStream.getTracks().forEach(t => t.stop());
+        liveStream = null;
+    }
+    if (liveVideoEl) {
+        try { liveVideoEl.pause(); liveVideoEl.srcObject = null; } catch (_) {}
+        liveVideoEl = null;
+    }
+    if (streamCameraPreview) {
+        streamCameraPreview.srcObject     = null;
+        streamCameraPreview.style.display = 'none';
+    }
+    if (streamCameraPlaceholder) streamCameraPlaceholder.style.display = 'flex';
+    liveCanvas = null;
+    liveCtx2d = null;
     stopStreamMicMonitor();
+}
+
+function disconnectWebSocket() {
+    if (ws) {
+        try {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'stop' }));
+            }
+            ws.close();
+        } catch (_) {}
+        ws = null;
+    }
+    teardownLiveCapture();
     showLoading(false);
     btnConnectStream.style.display      = 'inline-block';
     btnConnectStream.disabled           = false;
@@ -836,63 +905,175 @@ function disconnectWebSocket() {
     streamStatusContainer.style.display = 'none';
 }
 
+async function startLiveCapture() {
+    // audio:true AND video:true - the video half is what the old code never
+    // actually transmitted.
+    liveStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+            channelCount:     1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl:  true,
+        },
+        video: { width: 480, height: 360, facingMode: 'user' },
+    });
+
+    // -- Preview + mic meter --------------------------------------------------
+    if (streamCameraPreview) {
+        streamCameraPreview.srcObject     = liveStream;
+        streamCameraPreview.style.display = 'block';
+        if (streamCameraPlaceholder) streamCameraPlaceholder.style.display = 'none';
+        streamCameraPreview.play().catch(() => {});
+    }
+    if (streamMicLevel && micLevelWrapper) {
+        micLevelWrapper.style.display = 'flex';
+        liveMicStopFn = createMicLevelMonitor(liveStream, (level) => {
+            streamMicLevel.style.width = level + '%';
+        });
+    }
+
+    // -- Audio: 16 kHz PCM via AudioWorklet -----------------------------------
+    // The context is constructed AT 16 kHz so the browser resamples natively.
+    // The server does not resample, and feeding the wrong rate to SpeechBrain
+    // produces a confident wrong answer rather than an error.
+    liveAudioCtx = new (window.AudioContext || window.webkitAudioContext)({
+        sampleRate: 16000,
+    });
+    await liveAudioCtx.audioWorklet.addModule('pcm-worklet.js');
+
+    const source = liveAudioCtx.createMediaStreamSource(liveStream);
+    liveWorkletNode = new AudioWorkletNode(liveAudioCtx, 'pcm-16k');
+
+    liveWorkletNode.port.onmessage = (event) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const pcm = new Uint8Array(event.data);
+        const frame = new Uint8Array(pcm.length + 1);
+        frame[0] = MSG_AUDIO;
+        frame.set(pcm, 1);
+        ws.send(frame);
+    };
+
+    source.connect(liveWorkletNode);
+    // Deliberately NOT connected to destination - that would play the caller's
+    // own microphone back through their speakers. A worklet keeps running
+    // without a sink, unlike ScriptProcessorNode.
+
+    // -- Video: JPEG stills on an interval ------------------------------------
+    liveVideoEl = document.createElement('video');
+    liveVideoEl.srcObject = liveStream;
+    liveVideoEl.muted = true;
+    liveVideoEl.playsInline = true;
+    await liveVideoEl.play().catch(() => {});
+
+    liveCanvas = document.createElement('canvas');
+    liveCanvas.width  = 480;
+    liveCanvas.height = 360;
+    const ctx2d = liveCanvas.getContext('2d');
+
+    liveCtx2d = ctx2d;
+    // The timer is NOT started here. It starts once the server has told us the
+    // rate it expects, in startVideoSending() below.
+}
+
+// Begins sending frames at the rate the SERVER asked for.
+function startVideoSending(fps) {
+    if (liveVideoTimer) clearInterval(liveVideoTimer);
+    if (fps && fps > 0) VIDEO_FPS = fps;
+
+    liveVideoTimer = setInterval(() => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (!liveVideoEl || liveVideoEl.readyState < 2) return;
+        if (!liveCanvas || !liveCtx2d) return;
+
+        liveCtx2d.drawImage(liveVideoEl, 0, 0, liveCanvas.width, liveCanvas.height);
+        liveCanvas.toBlob(async (blob) => {
+            if (!blob || !ws || ws.readyState !== WebSocket.OPEN) return;
+            const buf = new Uint8Array(await blob.arrayBuffer());
+            const frame = new Uint8Array(buf.length + 1);
+            frame[0] = MSG_VIDEO;
+            frame.set(buf, 1);
+            ws.send(frame);
+        }, 'image/jpeg', 0.6);
+    }, Math.round(1000 / VIDEO_FPS));
+}
+
 btnConnectStream.addEventListener('click', async () => {
     btnConnectStream.disabled = true;
     streamStatusContainer.style.display = 'flex';
-    streamStatusText.textContent = "Connecting...";
+    setStreamStatus('Requesting camera and microphone...');
 
     try {
-        streamMicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        if (streamMicLevel && micLevelWrapper) {
-            micLevelWrapper.style.display = 'flex';
-            streamMicStopFn = createMicLevelMonitor(streamMicStream, (level) => {
-                streamMicLevel.style.width = `${level}%`;
-            });
-        }
-    } catch (e) {
-        console.warn('Stream mic monitor unavailable:', e.message);
+        await startLiveCapture();
+    } catch (err) {
+        setStreamStatus('Could not start capture');
+        showToast('Camera or microphone access was denied.');
+        await teardownLiveCapture();
+        btnConnectStream.disabled = false;
+        streamStatusContainer.style.display = 'none';
+        return;
     }
 
-    const apiUrl      = new URL(API_BASE);
-    const wsProto     = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-    const sessionParam = currentSessionId
-        ? `&session_id=${encodeURIComponent(currentSessionId)}` : '';
-    const wsUrl       = `${wsProto}//${apiUrl.host}/ws/stream?_=${Date.now()}${sessionParam}`;
+    setStreamStatus('Connecting...');
 
-    ws = new WebSocket(wsUrl);
+    const apiUrl  = new URL(API_BASE);
+    const wsProto = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    const params  = new URLSearchParams();
+    if (currentSessionId) params.set('session_id', currentSessionId);
+    // Browsers cannot set headers on a WebSocket handshake, so the key travels
+    // as a query parameter. The server accepts either.
+    if (SESSION_API_KEY) params.set('api_key', SESSION_API_KEY);
+
+    ws = new WebSocket(wsProto + '//' + apiUrl.host + '/ws/stream?' + params.toString());
+    ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
         btnConnectStream.style.display    = 'none';
         btnDisconnectStream.style.display = 'inline-block';
         btnConnectStream.disabled         = false;
-        streamStatusText.textContent      = "🔴 Connected — speak now...";
+        setStreamStatus('Live - start speaking');
     };
 
     ws.onmessage = (event) => {
-        try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'error') {
-                showToast(data.message || 'Streaming error occurred.', 'error');
-                disconnectWebSocket();
-                return;
+        let data;
+        try { data = JSON.parse(event.data); }
+        catch (e) { console.error('[Live] bad frame:', e); return; }
+
+        if (data.type === 'error') {
+            showToast(data.message || 'Streaming error.');
+            disconnectWebSocket();
+            return;
+        }
+
+        if (data.type === 'status') {
+            if (data.code === 'CONNECTED') {
+                // The server owns the frame rate; follow what it asked for.
+                startVideoSending(data.config && data.config.target_fps);
             }
-            if (data.type === 'status') {
-                streamStatusText.textContent = data.message || "Connected";
-                return;
-            }
-            if (data.session_id) {
-                renderResults(data);
-                streamStatusText.textContent = "✅ Result received — speak again...";
-                return;
-            }
-        } catch (e) {
-            console.error("WS parse error:", e);
+
+            const messages = {
+                CONNECTED:     'Live - start speaking',
+                ANALYZING:     'Analysing your turn...',
+                BUSY:          'Skipped - still working on the previous turn',
+                TURN_TOO_LONG: 'That turn was too long - pause between thoughts',
+                TURN_FAILED:   'That turn could not be analysed',
+            };
+            setStreamStatus(messages[data.code] || data.message || 'Connected');
+            return;
+        }
+
+        // Anything carrying a session_id is a real result payload.
+        if (data.session_id) {
+            renderResults(data);
+            setStreamStatus('Result in - keep talking');
         }
     };
 
     ws.onerror = () => {
-        showToast("WebSocket connection error.");
-        disconnectWebSocket();
+        showToast(
+            SESSION_API_KEY
+                ? 'Live connection failed. Check that your API key is valid.'
+                : 'Live connection failed.'
+        );
     };
 
     ws.onclose = () => { disconnectWebSocket(); };

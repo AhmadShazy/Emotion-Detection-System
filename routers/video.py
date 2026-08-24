@@ -146,18 +146,30 @@ async def analyze_video(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         def _analyse():
-            # ── Face ────────────────────────────────────────────────────────
+            import concurrent.futures
+
             from src.faceexpression.mediapipe_analyzer import analyze_frames
-            _timeline, face_state = analyze_frames(media["frame_paths"])
 
-            # ── Voice + speech + text, via the existing pipeline ────────────
-            text_state = voice_state = None
-            stt_result = ser_result = "N/A"
+            # Face reading and the audio pipeline share nothing — one reads
+            # JPEGs, the other a WAV — so they run CONCURRENTLY. Same inputs
+            # and same models as before; only the scheduling changed.
+            def _run_face():
+                try:
+                    return analyze_frames(media["frame_paths"])
+                except Exception as exc:
+                    print(f"[Video] Face analysis failed: {exc}")
+                    return ("", None)
 
-            if media["has_audio"]:
-                text_state, voice_state, stt_result, ser_result = (
-                    process_voice_pipeline(media["audio_path"])
-                )
+            def _run_audio():
+                if not media["has_audio"]:
+                    return None, None, "N/A", "N/A"
+                return process_voice_pipeline(media["audio_path"])
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                f_face  = pool.submit(_run_face)
+                f_audio = pool.submit(_run_audio)
+                _timeline, face_state = f_face.result()
+                text_state, voice_state, stt_result, ser_result = f_audio.result()
 
             effective_text = (
                 stt_result

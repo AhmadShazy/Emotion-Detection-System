@@ -206,3 +206,46 @@ def cleanup(job_dir: str) -> None:
     is rejected mid-write.
     """
     shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def ensure_16k_mono(wav_path: str) -> str:
+    """
+    Guarantees a WAV is 16 kHz mono, converting in place if it is not.
+
+    Returns the path to use (the original when it was already correct, or a
+    converted file alongside it).
+
+    Why this has to exist: SpeechBrain's wav2vec2 expects 16 kHz and NOTHING in
+    this project resamples. Feeding it 44.1 kHz does not raise — it returns a
+    confident WRONG label. The video path gets 16 kHz from ffmpeg's -ar and the
+    live path from the browser's AudioContext, but /analyze/voice accepts any
+    .wav a user can produce, so it needs this guard.
+    """
+    import soundfile as sf
+
+    try:
+        info = sf.info(wav_path)
+    except Exception as exc:
+        raise VideoIngestError(f"Could not read that audio file: {exc}")
+
+    if info.samplerate == AUDIO_SAMPLE_RATE and info.channels == 1:
+        return wav_path
+
+    converted = os.path.splitext(wav_path)[0] + "_16k.wav"
+    result = _run([
+        "ffmpeg", "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+        "-i", wav_path,
+        "-ac", "1",
+        "-ar", str(AUDIO_SAMPLE_RATE),
+        "-c:a", "pcm_s16le",
+        converted,
+    ], timeout=60)
+
+    if result.returncode != 0 or not os.path.isfile(converted):
+        raise VideoIngestError(
+            f"Could not convert that audio to 16 kHz mono. "
+            f"ffmpeg said: {result.stderr.strip()[:200]}"
+        )
+
+    print(f"[Audio] Converted {info.samplerate} Hz / {info.channels}ch -> 16 kHz mono")
+    return converted

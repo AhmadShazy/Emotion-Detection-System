@@ -171,11 +171,28 @@
 
                     <!-- ════════════════════ STREAM ══════════════════ -->
                     <div id="tab-stream" class="tab-pane">
-                        <h2>Live Multimodal Stream</h2>
+                        <h2>Live Call</h2>
                         <p class="subtitle">
-                            Real-time analysis — server listens via mic and camera.
-                            Speak naturally; results appear after each sentence.
+                            Your camera and microphone stream to the server.
+                            Speak naturally, then pause — each pause is analysed
+                            and a result appears a few seconds later.
                         </p>
+
+                        <!-- The live tab needs its OWN preview. It previously
+                             reused the Multimodal tab's <video>, which sits in
+                             a hidden pane while this tab is active, so nothing
+                             was ever visible. -->
+                        <div class="camera-preview-wrapper">
+                            <video id="stream-camera-preview"
+                                   class="camera-preview"
+                                   autoplay muted playsinline
+                                   style="display:none;">
+                            </video>
+                            <div class="camera-placeholder" id="stream-camera-placeholder">
+                                <span class="camera-icon">🎥</span>
+                                <p>Your camera appears here once connected</p>
+                            </div>
+                        </div>
 
                         <div class="mic-level-wrapper" id="mic-level-wrapper"
                              style="display:none;">

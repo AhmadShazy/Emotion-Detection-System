@@ -48,10 +48,19 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return _env(name, str(default)).strip().lower() == "true"
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(_env(name, str(default)).strip())
+    except ValueError:
+        print(f"[Config] {name} is not a whole number — using {default}.")
+        return default
+
+
 # ── Mode ──────────────────────────────────────────────────────────────────────
 # true  → only /analyze/text and /mock/* are served, and only RoBERTa is loaded.
 #         Suitable for a small hosted instance the LLM team can build against.
-# false → every mode, all four models. Needs a microphone, a camera and OpenFace.
+# false → every mode, all four models. Media comes from the browser, so the
+#         server needs no microphone, no camera and no OpenFace binary.
 TEXT_ONLY_MODE: bool = _env_bool("TEXT_ONLY_MODE", False)
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -82,3 +91,42 @@ LLM_ENDPOINT_URL: str = _env("LLM_ENDPOINT_URL")
 #
 # Leave this FALSE in any deployment.
 ALLOW_LOCALHOST: bool = _env_bool("ALLOW_LOCALHOST", False)
+
+# ── Capacity ──────────────────────────────────────────────────────────────────
+# These were previously read straight from os.environ inside routers/stream.py
+# and mediapipe_analyzer.py, which quietly broke the rule this module documents:
+# there should be exactly one place to look when behaviour depends on the
+# environment. They live here now.
+#
+# The defaults suit a 4-core CPU box. All three are hardware-shaped — raising
+# them without more cores makes things SLOWER, because Whisper and SpeechBrain
+# already saturate a core each and simply contend when run in parallel.
+
+# How many live calls may be in progress at once. A caller beyond this is
+# refused with AT_CAPACITY rather than accepted into unusable latency.
+MAX_ACTIVE_CALLS: int = _env_int("MAX_ACTIVE_CALLS", 2)
+
+# Worker threads available for turn analysis across ALL live calls.
+INFERENCE_WORKERS: int = _env_int("INFERENCE_WORKERS", 2)
+
+# MediaPipe face landmarker instances in the shared pool. Each is cheap
+# (~90ms to build, 3.8MB) but they compete for the same cores as everything else.
+FACE_POOL_WORKERS: int = _env_int("FACE_POOL_WORKERS", 2)
+
+# Frames per second the browser sends during a live call.
+#
+# The SERVER owns this number and announces it in the WebSocket handshake, so
+# the browser follows rather than deciding for itself. It was previously
+# hardcoded in frontend/app.js, which meant the server was smoothing face
+# results against an assumed rate it had no way to verify — change one side and
+# the other silently smoothed over the wrong duration.
+#
+# The face reading is a majority vote over the whole turn, so a higher rate adds
+# cost without changing the answer much.
+LIVE_VIDEO_FPS: int = _env_int("LIVE_VIDEO_FPS", 3)
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+# When true, every outbound payload is printed in full. Useful while developing;
+# in a deployment it writes users' transcribed speech into the server log, so it
+# defaults off.
+LOG_PAYLOADS: bool = _env_bool("LOG_PAYLOADS", False)
