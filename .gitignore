@@ -17,6 +17,9 @@ external/mediapipe/
 # IDE & Editor
 .vscode/
 .idea/
+# Local run configuration. The interpreter path in launch.json is whatever this
+# machine happens to use, so committing it would hand a teammate a broken one.
+.claude/
 
 # Environment configurations
 .env
