@@ -2,27 +2,27 @@
   "session_id": "sess-mock-low_conf",
   "user_input": {
     "text": "I guess so.",
-    "timestamp": "2026-08-22T08:07:50Z"
+    "timestamp": "2026-08-25T09:53:45Z"
   },
   "emotion_analysis": {
     "dominant_emotion": "neutral",
-    "confidence": 0.41,
+    "confidence": 0.12,
     "emotion_probabilities": {
-      "happy": 0.15,
-      "sad": 0.1,
-      "angry": 0.01,
-      "surprised": 0.01,
-      "fear": 0.01,
-      "disgust": 0.01,
-      "neutral": 0.63,
-      "empathetic": 0.01,
-      "concerned": 0.01,
-      "shame": 0.01,
-      "guilt": 0.01,
-      "anxiety": 0.01,
-      "frustration": 0.01,
-      "joy": 0.01,
-      "calm": 0.01
+      "happy": 0.26,
+      "sad": 0.19,
+      "angry": 0.02,
+      "surprised": 0.02,
+      "fear": 0.02,
+      "disgust": 0.02,
+      "neutral": 0.31,
+      "empathetic": 0.02,
+      "concerned": 0.02,
+      "shame": 0.02,
+      "guilt": 0.02,
+      "anxiety": 0.02,
+      "frustration": 0.02,
+      "joy": 0.02,
+      "calm": 0.02
     }
   },
   "tone_analysis": {

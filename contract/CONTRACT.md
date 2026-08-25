@@ -127,9 +127,27 @@ practical guidance:
 | 0.35 – 0.60 | moderate — a real reading, not a firm one | let it colour tone, not content |
 | above 0.60 | strong — signals agree, or the state has persisted | safe to respond to directly |
 
+🚨 **This table does NOT apply when `conflict_analysis.detected` is true.**
+Read that field first, and only fall back to this table when it is `false`.
+
+Confidence measures *how much the modalities agreed*. A conflict is the case
+where they deliberately do not: in `masked_anger` the face says happy and the
+voice says angry, so whichever emotion wins carries only part of the evidence
+and the number lands near 0.30 by construction. That is the metric working, not
+a weak reading. Applying the row above to a conflict payload would make you
+discard exactly the detections this system exists to produce. **A detected
+conflict is actionable at any confidence** — see `conflict_analysis` below.
+
 ⚠️ **The first turn of any session cannot exceed 0.70**, because the emotional
-history starts empty. Confidence rises as an emotion persists across turns.
-A low number early in a conversation is expected, not a fault.
+history starts genuinely empty. Confidence rises as an emotion persists across
+turns — measured, a reading repeated four times climbs 0.63 → 0.69 → 0.75 →
+0.81. A low number early in a conversation is expected, not a fault.
+
+This holds for every emotion including `neutral`. Before v1.2 the history was
+pre-seeded with five neutral turns, so a first-turn neutral scored up to 0.97
+while every other first-turn emotion was capped at 0.70 — the system was at its
+most confident about its least actionable answer. If you calibrated any
+threshold against payloads generated before v1.2, re-check it.
 
 ### `emotion_analysis.emotion_probabilities` · object
 
@@ -207,6 +225,17 @@ cases), so you don't need to correct for it — but knowing a mask is present le
 you choose a much better reply. Acknowledging the gap gently tends to land far
 better than responding to either signal alone.
 
+🚨 **Do not gate this on `confidence`.** A conflict payload reports a low
+confidence *because* the modalities disagree — that is the definition of a
+conflict, not a sign the reading is unreliable. Real values from the frozen
+examples: `masked_anger` 0.31, `suppressed_frustration` 0.34,
+`internal_sadness` 0.19. All three sit below the 0.35 row in the confidence
+table, and all three are genuine detections you should act on.
+
+Branch on `conflict_analysis.detected` **before** you look at `confidence`.
+The one field that should gate your reply is `detected`; `confidence` then tells
+you how firmly to lean on `dominant_emotion` *within* that branch.
+
 ---
 
 ## Try it without running any models
@@ -264,6 +293,37 @@ Nothing is ever `null`. Every key is always present.
 ---
 
 ## Changelog
+
+### v1.2 — confidence recalibrated
+
+**No key changed name, type or presence.** Only the *value* of
+`emotion_analysis.confidence` moves, so a consumer keeps working — but any
+threshold tuned against pre-v1.2 payloads needs re-checking, and the frozen
+examples in `contract/payloads/` have been regenerated.
+
+Two defects were fixed, both found by measurement:
+
+- The emotional history was pre-seeded with five `neutral` turns, giving that
+  one class a full historical score on the very first turn. A first-turn
+  neutral scored up to 0.97 while every other first-turn emotion was capped at
+  0.70, so the documented ceiling was false for exactly one emotion — and the
+  system was most confident about its least actionable answer. History now
+  starts genuinely empty and the ceiling holds for every class.
+- Per-modality calibration was multiplied into the confidence rather than the
+  weight, which placed it in the numerator of the fusion ratio while the
+  denominator kept the uncalibrated weight. Any modality trusted below 1.0 —
+  voice at 0.9, face at 0.8 — therefore lowered the result merely by being
+  present, even in perfect agreement. Measured on identical readings at 0.90:
+  text alone 0.63, text+voice 0.59, all three 0.57. Confidence now holds steady
+  at 0.63 as agreeing evidence is added instead of decaying.
+
+The visible effect is that weak and conflicting readings now separate properly.
+`low_confidence_disagreement`, the example built to be untrustworthy, fell from
+0.41 to 0.12 and now scores *below* all three conflict examples, where it
+previously outranked them.
+
+Also clarified, with no code change: a detected conflict is actionable at any
+confidence, and the confidence threshold table must not be applied to it.
 
 ### v1.1 — `conflict_analysis` added
 

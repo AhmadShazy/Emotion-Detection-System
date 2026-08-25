@@ -2,15 +2,15 @@
   "session_id": "sess-mock-conflict",
   "user_input": {
     "text": "Sure, I can redo it.",
-    "timestamp": "2026-08-22T08:07:50Z"
+    "timestamp": "2026-08-25T09:53:45Z"
   },
   "emotion_analysis": {
     "dominant_emotion": "angry",
-    "confidence": 0.31,
+    "confidence": 0.34,
     "emotion_probabilities": {
-      "happy": 0.27,
+      "happy": 0.28,
       "sad": 0.01,
-      "angry": 0.47,
+      "angry": 0.46,
       "surprised": 0.01,
       "fear": 0.01,
       "disgust": 0.01,
