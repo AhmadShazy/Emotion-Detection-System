@@ -30,8 +30,14 @@ Effort estimates are for someone who already knows the codebase.
 - [x] **`/ws/stream` had no authentication.** Every middleware check sat inside
       `if scope["type"] == "http"`. Fixed in `17c0369`.
 - [x] **The localhost bypass trusted the Host header**, contradicting the
-      guarantee written in `src/core/config.py`. Now reads the socket peer.
-      Fixed in `17c0369`.
+      guarantee written in `src/core/config.py`. Fixed in `17c0369`, then the
+      bypass was **removed entirely** — a rule keyed on where the caller
+      connected from meant the auth path was the one path local testing never
+      exercised, and behind a cloud proxy the socket peer is the proxy,
+      sometimes itself on loopback, so enabling it in a deployment would have
+      opened everything rather than nothing. Local and deployed now take the
+      same path. This also closes the `--proxy-headers` decision the review
+      raised, since nothing reads the peer address any more.
 - [x] **Two concurrent uploads could splice each other's transcripts** through
       the shared openai-whisper decoder, silently. Fixed in `17c0369`.
 
@@ -167,10 +173,9 @@ previous architecture.
 - **Lower `MAX_UPLOAD_BYTES`** from 200 MB. 30 s of 720p webm is under 15 MB.
 - **Point the platform health check at `/health`** — Cloud Run ignores the
   Dockerfile `HEALTHCHECK`.
-- **Leave `ALLOW_LOCALHOST=false`.** Behind a proxy the socket peer is the
-  proxy, sometimes on loopback; turning it on would expose everything. If it
-  ever must be on, run uvicorn with `--proxy-headers` and read
-  `X-Forwarded-For`.
+- **Set `API_KEYS` as a platform secret.** Leaving it unset is the only
+  remaining way to run without authentication, and startup prints a loud banner
+  when that happens.
 
 ### 8. Decide the push-delivery story
 `contract/CONTRACT.md`, `routers/text.py` · **15 min to document, 2 h to build**
