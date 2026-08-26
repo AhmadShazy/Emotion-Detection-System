@@ -68,8 +68,6 @@ print('RoBERTa cached into image')"
 # ── Runtime configuration ────────────────────────────────────────────────────
 # Text-only is the only mode this image can serve.
 ENV TEXT_ONLY_MODE=true \
-    # No loopback bypass in a deployment — every caller presents a key.
-    ALLOW_LOCALHOST=false \
     # 7860 is the Hugging Face Spaces default. Other platforms inject $PORT.
     PORT=7860
 
