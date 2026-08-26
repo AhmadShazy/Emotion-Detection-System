@@ -1,6 +1,6 @@
 {
   "generated_by": "scripts/generate_contract_payloads.py",
-  "generated_at": "2026-08-22T08:07:50Z",
+  "generated_at": "2026-08-25T09:53:45Z",
   "note": "Produced by running the real fusion engine. Do not hand-edit — re-run the generator instead.",
   "scenarios": [
     {
@@ -41,7 +41,7 @@
         "voice"
       ],
       "dominant_emotion": "angry",
-      "confidence": 0.27,
+      "confidence": 0.53,
       "tone": "hostile"
     },
     {
@@ -53,7 +53,7 @@
         "face"
       ],
       "dominant_emotion": "angry",
-      "confidence": 0.29,
+      "confidence": 0.31,
       "tone": "hostile"
     },
     {
@@ -65,7 +65,7 @@
         "face"
       ],
       "dominant_emotion": "angry",
-      "confidence": 0.31,
+      "confidence": 0.34,
       "tone": "hostile"
     },
     {
@@ -77,7 +77,7 @@
         "face"
       ],
       "dominant_emotion": "sad",
-      "confidence": 0.17,
+      "confidence": 0.19,
       "tone": "reflective"
     },
     {
@@ -89,7 +89,7 @@
         "face"
       ],
       "dominant_emotion": "neutral",
-      "confidence": 0.41,
+      "confidence": 0.12,
       "tone": "conversational"
     },
     {
@@ -97,7 +97,7 @@
       "description": "Silence, or a transcript filtered as a Whisper hallucination. user_input.text is an EMPTY STRING — the LLM must handle this.",
       "signals": [],
       "dominant_emotion": "neutral",
-      "confidence": 0.3,
+      "confidence": 0.0,
       "tone": "measured"
     }
   ]
