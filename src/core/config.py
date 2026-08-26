@@ -84,13 +84,12 @@ API_KEYS: set = {k.strip() for k in _raw_keys.split(",") if k.strip()}
 # endpoint never blocks or fails the user's request.
 LLM_ENDPOINT_URL: str = _env("LLM_ENDPOINT_URL")
 
-# ── Local Development ─────────────────────────────────────────────────────────
-# When true, requests whose real TCP peer is a loopback address skip the key
-# check, so local development needs no key. Enforced against the actual socket
-# peer, never the Host header, which a client controls.
-#
-# Leave this FALSE in any deployment.
-ALLOW_LOCALHOST: bool = _env_bool("ALLOW_LOCALHOST", False)
+# NOTE: there is deliberately no ALLOW_LOCALHOST setting. Authentication used to
+# be skipped for callers on a loopback address, which meant the auth path was
+# the one path local testing never exercised — and behind a cloud proxy the
+# socket peer is the proxy, sometimes itself on loopback, so switching it on in
+# a deployment would have opened everything rather than nothing. Running here
+# and running on a server now take the same path: present a key.
 
 # ── Capacity ──────────────────────────────────────────────────────────────────
 # These were previously read straight from os.environ inside routers/stream.py

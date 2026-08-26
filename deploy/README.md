@@ -105,8 +105,8 @@ out to be slow or expensive.
 
 ## Before you deploy
 
-- [ ] `API_KEYS` set as a **secret** on the platform, never committed
-- [ ] `ALLOW_LOCALHOST` left at `false` (the image already defaults it)
+- [ ] `API_KEYS` set as a **secret** on the platform, never committed —
+      leaving it unset disables authentication entirely
 - [ ] `TEXT_ONLY_MODE` left at `true` (the image already defaults it)
 - [ ] Teammate has the key, sent over something private — not the repo, not a
       public channel

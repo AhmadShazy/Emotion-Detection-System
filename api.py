@@ -6,9 +6,9 @@ Humanoid Assistant V2 API
 TEXT_ONLY_MODE=true  → only /analyze/text + /health exposed
 TEXT_ONLY_MODE=false → all endpoints exposed
 
-Localhost requests bypass API key check for local development.
 Frontend static files (UI) are always public — no key needed.
-API endpoints require X-API-Key header.
+API endpoints require a key, on every machine including this one: callers send
+X-API-Key, or ?api_key= for WebSockets, which cannot carry headers.
 """
 
 import sys
@@ -45,39 +45,6 @@ if not TEXT_ONLY_MODE:
 
 from urllib.parse import parse_qs
 
-from src.core.config import ALLOW_LOCALHOST
-
-# Loopback addresses a real TCP peer can actually present. "localhost" and
-# "0.0.0.0" are not in this set on purpose: a peer address is an IP, never a
-# hostname, and 0.0.0.0 is a bind address rather than something a client can
-# connect from.
-_LOOPBACK = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
-
-
-def _peer_is_loopback(scope) -> bool:
-    """
-    True when the request really arrived over the loopback interface.
-
-    Reads scope["client"], the actual socket peer. It deliberately does NOT
-    read the Host header, which any client sets to whatever it likes — sending
-    "Host: localhost" to a public server would otherwise skip the key check
-    entirely. src/core/config.py documents this guarantee; this is the code
-    that keeps it.
-
-    ⚠️  Behind a reverse proxy (Cloud Run, Render, Railway) the socket peer is
-    the PROXY, and on some platforms that address is on loopback. Turning
-    ALLOW_LOCALHOST on in such a deployment would therefore expose the whole
-    API, not just local traffic. Leave it false anywhere but a laptop, and if
-    that ever changes, run uvicorn with --proxy-headers and read
-    X-Forwarded-For instead.
-    """
-    if not ALLOW_LOCALHOST:
-        return False
-    client = scope.get("client")
-    if not client:
-        return False
-    return str(client[0]) in _LOOPBACK
-
 
 def _extract_key(scope) -> str:
     """
@@ -103,11 +70,16 @@ class APIKeyMiddleware:
     Always PUBLIC (no key needed):
       - /health, /docs, /redoc, /openapi.json  (monitoring + docs)
       - Frontend static files (/, *.html, *.css, *.js, *.ico etc.)
-      - Requests whose real socket peer is loopback, when ALLOW_LOCALHOST=true
 
     Always PROTECTED (key required):
       - /analyze/*   (text, voice, video)
       - /ws/stream   (websocket)
+
+    There is deliberately no exemption for local requests. A bypass keyed on
+    where the caller connected from means the thing you test on a laptop is not
+    the thing that runs on the server: the auth path — the part most worth
+    exercising — would be the one part never exercised. Running locally means
+    presenting a key, exactly as a deployed caller does.
 
     The WebSocket branch is not an afterthought: every check here used to sit
     inside `if scope["type"] == "http"`, so a "websocket" scope fell straight
@@ -119,12 +91,11 @@ class APIKeyMiddleware:
         self.app = app
 
     def _is_authorised(self, scope) -> bool:
-        # An empty key set disables auth deliberately (local dev, text-only
-        # demos). The lifespan handler shouts about it at startup so it can
-        # never be the accidental state in a deployment.
+        # An empty key set turns authentication off outright. That is a real
+        # configuration — a text-only demo, or a checkout with no .env — rather
+        # than a hidden special case, and the lifespan handler shouts about it
+        # at startup so it can never be the accidental state in a deployment.
         if not API_KEYS:
-            return True
-        if _peer_is_loopback(scope):
             return True
         return _extract_key(scope) in API_KEYS
 
@@ -188,9 +159,6 @@ async def lifespan(app: FastAPI):
         print("[STARTUP] !!  NO API KEYS SET — EVERY ENDPOINT IS OPEN TO ANYONE  !!")
         print("[STARTUP] !!  Set API_KEYS before exposing this server publicly.  !!")
         print("[STARTUP] " + "!" * 62)
-    if ALLOW_LOCALHOST:
-        print("[STARTUP] ⚠️  ALLOW_LOCALHOST=true — loopback callers skip the key "
-              "check. Correct on a laptop, wrong behind a cloud proxy.")
 
     for sub in ("data/recordings", "data/processed", "data/jobs"):
         os.makedirs(os.path.join(PROJECT_ROOT, sub), exist_ok=True)
