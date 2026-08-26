@@ -10,6 +10,8 @@ what lets many people use it at once.
 
 import sys
 import os
+import threading
+
 import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -29,6 +31,30 @@ except ImportError:
     def load_emotion_model(): return None
 
 from src.streaming.unified_pipeline import build_text_state, build_voice_state
+
+
+# ── Whisper serialisation ─────────────────────────────────────────────────────
+# openai-whisper's decoder is NOT safe to call concurrently on one model
+# object, and registry.get("whisper") hands every caller the same object.
+#
+# DecodingTask installs PyTorch forward hooks on the shared decoder's key/value
+# projections to build its kv-cache, and those hooks return a value, which
+# PyTorch treats as replacing the module's output. Two decodes running at once
+# therefore write into each other's cache: request A's hook fires inside
+# request B's forward pass and hands back A's accumulation. Both run greedy
+# decoding at batch size 1 and the causal mask broadcasts, so nothing raises —
+# you get a plausible transcript containing fragments of the other person's
+# speech, which then feeds the text emotion model and is forwarded downstream.
+# A wrong answer, a privacy leak between users, and completely silent.
+#
+# Two simultaneous requests are enough, and /analyze/voice plus /analyze/video
+# counts as two because video calls this same pipeline.
+#
+# Serialising costs no throughput: Whisper base already saturates the cores, so
+# a second concurrent decode was never running in parallel in any real sense.
+# The live call is unaffected and does not take this lock — it uses
+# faster-whisper, whose CTranslate2 backend serialises internally.
+_WHISPER_LOCK = threading.Lock()
 
 
 # ── Whisper hallucination patterns ────────────────────────────────────────────
@@ -156,9 +182,10 @@ def process_voice_pipeline(wav_path: str):
             return "N/A"
         try:
             from src.core.model_registry import registry
-            model         = registry.get("whisper")
-            transcription = model.transcribe(wav_path)
-            raw_text      = transcription["text"].strip()
+            model = registry.get("whisper")
+            with _WHISPER_LOCK:
+                transcription = model.transcribe(wav_path)
+            raw_text = transcription["text"].strip()
 
             if _is_hallucination(raw_text):
                 print(f"[VoicePipeline] ⚠️  Hallucination filtered: '{raw_text}'")

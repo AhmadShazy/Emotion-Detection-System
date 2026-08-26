@@ -89,7 +89,14 @@ SCENARIOS = [
     {
         "name": "voice_and_text_agree",
         "why":  "Voice mode. Transcript and vocal tone point the same way, so confidence is higher.",
-        "text": "I am really not happy with how this turned out.",
+        # The wording has to land on ANGER once RoBERTa has read it, or this
+        # example quietly stops being an agreement case. The previous sentence
+        # ("I am really not happy with how this turned out") came back as
+        # sadness, so the payload named voice_and_text_agree was in fact a
+        # text-vs-voice disagreement scoring 0.29 while its own description
+        # promised higher confidence — the example set had no genuine agreement
+        # case at all. Verified: this sentence maps to angry.
+        "text": "This is completely unacceptable and I am furious about it.",
         "voice": voice_state("Angry", 0.78, 0.93), "face": None,
     },
     {

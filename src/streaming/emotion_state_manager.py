@@ -13,15 +13,29 @@ class EmotionStateManager:
             "face":  0.3,
             "text":  0.3,
         }
+        # How much a modality's self-reported confidence is worth. This is a
+        # TRUST weight, so it belongs on the weight and not on the confidence
+        # value — see fuse() for why that distinction decides whether agreement
+        # raises confidence or lowers it.
         self.calibration = {
             "voice": 0.9,
             "face":  0.8,
             "text":  1.0,
         }
         self.current_stable_emotion = "neutral"
-        self.emotion_memory         = deque(
-            ["neutral"] * memory_size, maxlen=memory_size
-        )
+        self.memory_size            = memory_size
+
+        # Starts EMPTY, not pre-filled with neutrals.
+        #
+        # Pre-seeding ["neutral"] * 5 gave the neutral class a historical score
+        # of 1.0 on the very first turn while every other emotion got 0.0. A
+        # first-turn neutral therefore scored 0.97 where a first-turn sadness
+        # scored 0.69 — so the system was most confident about the least
+        # actionable reading it can produce, and CONTRACT.md's bolded promise
+        # that "the first turn of any session cannot exceed 0.70" was false for
+        # exactly one emotion. Starting empty makes that promise true for all of
+        # them.
+        self.emotion_memory = deque(maxlen=memory_size)
 
     def _align_emotion(self, emotion):
         """
@@ -151,18 +165,11 @@ class EmotionStateManager:
         v_rel  = voice_state["reliability"] if voice_state else 0.0
         f_rel  = face_state["reliability"]  if face_state  else 0.0
 
-        t_conf = (
-            text_state["confidence"]  * self.calibration["text"]
-            if text_state  else 0.0
-        )
-        v_conf = (
-            voice_state["confidence"] * self.calibration["voice"]
-            if voice_state else 0.0
-        )
-        f_conf = (
-            face_state["confidence"]  * self.calibration["face"]
-            if face_state  else 0.0
-        )
+        # Confidences stay RAW here. Calibration is applied to the weights
+        # below instead, so that it divides out of the final ratio.
+        t_conf = text_state["confidence"]  if text_state  else 0.0
+        v_conf = voice_state["confidence"] if voice_state else 0.0
+        f_conf = face_state["confidence"]  if face_state  else 0.0
 
         conflict_detected, conflict_type, conflict_details = (
             self.detect_conflict(text_state, voice_state, face_state)
@@ -182,9 +189,28 @@ class EmotionStateManager:
 
         modality_contributions = {"voice": 0.0, "face": 0.0, "text": 0.0}
 
+        # Calibration multiplies the WEIGHT, not the confidence.
+        #
+        # It used to multiply the confidence instead, which put it in the
+        # numerator of the ratio below while the denominator kept the
+        # uncalibrated weight. Every modality trusted at less than 1.0 — voice
+        # at 0.9, face at 0.8 — therefore dragged the final number down just by
+        # being present, even when it agreed perfectly. Measured on identical
+        # readings at 0.90 confidence: text alone 0.63, text+voice 0.59,
+        # text+voice+face 0.57. Adding agreeing evidence made the system less
+        # sure, which is backwards, and it pushed the conflict cases — the ones
+        # that need all three modalities to exist at all — under the 0.35 mark
+        # CONTRACT.md tells the LLM to ignore.
+        #
+        # With calibration on the weight, the ratio is exactly
+        #     (mean confidence of the modalities that agreed)
+        #       x (share of total weight that agreed)
+        # which is what the original design was reaching for.
+
         if text_state and text_state["emotion"]:
             emo    = self._align_emotion(text_state["emotion"])
-            weight = self.base_weights["text"] * t_rel
+            weight = (self.base_weights["text"] * t_rel
+                      * self.calibration["text"])
             contrib = weight * t_conf
             scores[emo]                     = scores.get(emo, 0.0) + contrib
             total_active_weight            += weight
@@ -192,7 +218,8 @@ class EmotionStateManager:
 
         if voice_state and voice_state["emotion"]:
             emo    = self._align_emotion(voice_state["emotion"])
-            weight = self.base_weights["voice"] * v_rel * v_weight_mod
+            weight = (self.base_weights["voice"] * v_rel * v_weight_mod
+                      * self.calibration["voice"])
             contrib = weight * v_conf
             scores[emo]                      = scores.get(emo, 0.0) + contrib
             total_active_weight             += weight
@@ -200,7 +227,8 @@ class EmotionStateManager:
 
         if face_state and face_state["emotion"]:
             emo    = self._align_emotion(face_state["emotion"])
-            weight = self.base_weights["face"] * f_rel * f_weight_mod
+            weight = (self.base_weights["face"] * f_rel * f_weight_mod
+                      * self.calibration["face"])
             contrib = weight * f_conf
             scores[emo]                     = scores.get(emo, 0.0) + contrib
             total_active_weight            += weight
@@ -231,10 +259,16 @@ class EmotionStateManager:
         historical_score = 0.0
 
         if self.emotion_memory:
-            history_count    = sum(
+            history_count = sum(
                 1 for e in self.emotion_memory if e == target_emotion
             )
-            historical_score = history_count / len(self.emotion_memory)
+            # Divided by the FULL window, not by how much of it has filled up.
+            # Dividing by len() would score one remembered turn as a unanimous
+            # history and jump confidence from 0.63 to 0.93 between turns one
+            # and two. Against the full window the same run climbs
+            # 0.63 -> 0.69 -> 0.75 -> 0.81, which is the gradual rise
+            # CONTRACT.md describes.
+            historical_score = history_count / self.memory_size
 
         smoothed_confidence = (
             (alpha * final_confidence) + ((1.0 - alpha) * historical_score)
