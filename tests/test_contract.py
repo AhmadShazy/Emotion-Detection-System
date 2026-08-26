@@ -342,6 +342,85 @@ def test_voice_state_is_built_in_exactly_one_place():
     assert "unified_pipeline" in hits[0], f"unexpected location: {hits[0]}"
 
 
+def test_speechbrain_patches_exist_in_exactly_one_place():
+    """
+    The most fragile code in the project is the SpeechBrain compatibility patch
+    set: monkeypatches against a PRIVATE API, one of which exists only because
+    transformers removed AutoModelWithLMHead in v5.
+
+    It used to be written out three times — ModelRegistry, SEREngine, and a
+    PARTIAL third copy in scripts/download_models.py. The partial one omitted
+    the LazyModule patch, so on speechbrain 1.1.0 the downloader died with
+    "Lazy import of LazyModule(target=...k2_fsa) failed" while the running
+    server loaded the identical model fine. A Docker build runs the downloader,
+    so the broken copy was the one deployment depended on — and the failure
+    only surfaced when a build was first attempted.
+
+    The reliability formula and the silence threshold each already have a guard
+    like this. The thing most likely to break on a dependency bump had none.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        # --untracked matters: without it a brand-new file is invisible to the
+        # search, so adding a second copy in a file you have not committed yet
+        # reads as "zero copies exist" rather than as the duplication it is.
+        ["git", "grep", "-n", "--untracked", "def _patched_ensure_module", "--",
+         "src/", "scripts/", "routers/", "api.py"],
+        capture_output=True, text=True, cwd=PROJECT_ROOT,
+    )
+    assert result.returncode in (0, 1), (
+        f"git grep failed to run: {result.stderr.strip()}"
+    )
+    hits = [ln for ln in result.stdout.splitlines() if ln.strip()]
+
+    assert len(hits) == 1, (
+        "The SpeechBrain LazyModule patch should exist in exactly one place "
+        f"(src/core/speechbrain_compat.py). Found {len(hits)}:\n"
+        + "\n".join(hits)
+    )
+    assert "speechbrain_compat" in hits[0].replace("\\", "/"), (
+        f"unexpected location: {hits[0]}"
+    )
+
+
+def test_every_speechbrain_caller_fetches_the_same_way():
+    """
+    The downloader bakes the model into the image and the registry loads it at
+    runtime. If they disagree about how files land in savedir, the image
+    contains one shape and the server expects another.
+
+    Both must pass fetch_kwargs(), which asks SpeechBrain to COPY rather than
+    symlink into the Hugging Face cache. The symlink default left savedir
+    holding five links that only resolve alongside that cache — a Windows
+    privilege error locally, and a dangling-link trap across Docker layers.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "grep", "-n", "--untracked", "foreign_class(", "--",
+         "src/", "scripts/"],
+        capture_output=True, text=True, cwd=PROJECT_ROOT,
+    )
+    assert result.returncode in (0, 1), (
+        f"git grep failed to run: {result.stderr.strip()}"
+    )
+    # Only the actual invocations, not the imports.
+    call_sites = [
+        ln for ln in result.stdout.splitlines()
+        if ln.strip() and "import" not in ln
+    ]
+    assert call_sites, "expected to find foreign_class call sites"
+
+    for site in call_sites:
+        path = site.split(":")[0]
+        source = open(os.path.join(PROJECT_ROOT, path), encoding="utf-8").read()
+        assert "fetch_kwargs()" in source, (
+            f"{path} calls foreign_class without fetch_kwargs(), so it may "
+            f"fetch differently from the other callers"
+        )
+
+
 def test_silence_threshold_is_shared_between_paths():
     """
     Upload and live must agree on what counts as too quiet to be speech.

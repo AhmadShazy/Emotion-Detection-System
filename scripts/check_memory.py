@@ -151,42 +151,12 @@ def measure_model_memory():
     # ── SpeechBrain Wav2Vec2 ──────────────────────────────────────────────────
     SPEECHBRAIN_CACHE = os.path.join(PROJECT_ROOT, "external", "speechbrain")
 
-    # Apply patches before SpeechBrain import
-    import torchaudio
-    import soundfile as sf
-
-    if not hasattr(torchaudio, "list_audio_backends"):
-        torchaudio.list_audio_backends = lambda: ["soundfile"]
-    if not hasattr(torchaudio, "get_audio_backend"):
-        torchaudio.get_audio_backend = lambda: "soundfile"
-
-    if not getattr(torchaudio, "_patched_by_ser_engine", False):
-        def _custom_load(filepath, **kwargs):
-            data, samplerate = sf.read(filepath)
-            data = data.astype(np.float32)
-            if data.ndim == 1:
-                tensor = torch.from_numpy(data).unsqueeze(0)
-            else:
-                tensor = torch.from_numpy(data.transpose())
-            return tensor, samplerate
-        torchaudio.load = _custom_load
-        torchaudio._patched_by_ser_engine = True
-
-    import transformers
-    if not hasattr(transformers, "AutoModelWithLMHead"):
-        transformers.AutoModelWithLMHead = getattr(
-            transformers, "AutoModelForCausalLM", transformers.AutoModel
-        )
-
-    import huggingface_hub
-    if not getattr(huggingface_hub, "_patched_by_ser_engine", False):
-        _orig = huggingface_hub.hf_hub_download
-        def _p(*a, **kw):
-            if "use_auth_token" in kw:
-                kw["token"] = kw.pop("use_auth_token")
-            return _orig(*a, **kw)
-        huggingface_hub.hf_hub_download        = _p
-        huggingface_hub._patched_by_ser_engine = True
+    # Patches must be applied before SpeechBrain is imported. This was a fourth
+    # partial copy of them, and like the downloader's it omitted the LazyModule
+    # patch — so measuring memory would have failed on speechbrain 1.1.0 for a
+    # reason that had nothing to do with memory.
+    from src.core.speechbrain_compat import apply_patches, fetch_kwargs
+    apply_patches()
 
     before = get_ram_mb()
     from speechbrain.inference.interfaces import foreign_class
@@ -196,6 +166,7 @@ def measure_model_memory():
         classname="CustomEncoderWav2vec2Classifier",
         savedir=SPEECHBRAIN_CACHE,
         run_opts={"device": "cpu"},
+        **fetch_kwargs(),
     )
     after = get_ram_mb()
     snapshots["speechbrain"] = after

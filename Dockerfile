@@ -1,20 +1,42 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Humanoid Assistant — input module
 #
-# Builds the TEXT-ONLY deployment: /analyze/text plus the /mock/* contract
-# sandbox. That is what the LLM team needs to build against, and it needs no
-# microphone, no camera and no OpenFace binary — so it runs on ordinary Linux
-# hosting.
-#
-# Full mode (voice / multimodal / live) is NOT buildable this way yet: it
-# depends on the server owning a microphone and a webcam, and on a Windows-only
-# OpenFace executable. Removing those constraints is Phases 3 and 4.
+# Builds FULL mode: text, voice, video upload and the live video call, plus the
+# /mock/* contract sandbox. The server owns no microphone and no camera —
+# everything is captured in the browser and uploaded — so nothing here needs a
+# capture device, and any number of people can use one instance at once.
 #
 # Build:  docker build -t humanoid-input .
-# Run:    docker run -p 7860:7860 -e API_KEYS=your-key humanoid-input
+# Run:    docker run -p 8000:8000 -e PORT=8000 -e API_KEYS=your-key humanoid-input
+#
+# Verify it is self-contained (this is the point of baking the models in):
+#         docker run --network=none -p 8000:8000 -e PORT=8000 \
+#                    -e API_KEYS=k humanoid-input
+#         Every model must load with no network at all.
+#
+# Expect roughly a 5 GB image and a 1.6 GB resident set. That trades disk for a
+# predictable cold start: Cloud Run gives a container ~240 s to pass its startup
+# probe, and downloading ~1.7 GB of models inside that window is not something
+# to gamble a demo on. It also removes a real failure seen on a laptop, where
+# Hugging Face answered model requests with HTTP 429 during startup.
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM python:3.10-slim
+
+# ── System packages ──────────────────────────────────────────────────────────
+# ffmpeg is NOT optional in full mode. src/video/ingest.py shells out to ffprobe
+# and ffmpeg to validate uploads, extract frames and normalise audio to 16 kHz,
+# and openai-whisper shells out to it again to decode audio inside
+# model.transcribe(). Without it every voice and video request fails.
+#
+# libgl1 and libglib2.0-0 are for OpenCV, which mediapipe depends on. The
+# non-headless opencv wheel links against libGL, so `import cv2` — and therefore
+# all face analysis — fails on a bare slim image without them.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libgl1 \
+        libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Hugging Face Spaces runs containers as UID 1000 and expects a writable home.
 # Creating the user explicitly keeps this image portable across hosts that do
@@ -24,62 +46,101 @@ RUN useradd -m -u 1000 appuser
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     # The project logs emoji and box-drawing characters. Containers default to
     # ASCII, which would raise UnicodeEncodeError on the first log line.
     PYTHONIOENCODING=utf-8 \
     LANG=C.UTF-8 \
     HOME=/home/appuser \
-    HF_HOME=/home/appuser/.cache/huggingface \
+    # Every model cache lives under one tree inside the image. This matters
+    # beyond tidiness: SpeechBrain's savedir is populated with SYMLINKS into the
+    # Hugging Face cache, so the two must sit in the same image (and, on a build
+    # host, the same layer) or the links dangle and SER fails to load.
+    HF_HOME=/app/external/hf \
     # matplotlib arrives as a transitive dependency and probes for a display.
     MPLBACKEND=Agg
 
 WORKDIR /app
 
 # ── Python dependencies ──────────────────────────────────────────────────────
-# requirements-text.txt is the verified minimal set — see the notes in that file
-# before trimming it. The CPU torch index avoids ~2 GB of unused CUDA libraries.
-COPY --chown=appuser:appuser requirements-text.txt ./
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-        --extra-index-url https://download.pytorch.org/whl/cpu \
-        -r requirements-text.txt
+# requirements.lock, not requirements.txt. The unpinned file resolves to
+# different libraries on different days, and this system fails SILENTLY when
+# that happens — model_registry swallows loader exceptions and /health reports
+# "ok" regardless, so a bad resolve produces a server that starts, looks
+# healthy, and answers "neutral" forever. See the header of requirements.lock.
+COPY --chown=appuser:appuser requirements.lock ./
 
-# ── Application ──────────────────────────────────────────────────────────────
-COPY --chown=appuser:appuser api.py            ./
-COPY --chown=appuser:appuser routers/          ./routers/
-COPY --chown=appuser:appuser schemas/          ./schemas/
-COPY --chown=appuser:appuser src/              ./src/
-COPY --chown=appuser:appuser frontend/         ./frontend/
-COPY --chown=appuser:appuser contract/         ./contract/
+# torch and torchaudio come from the CPU index FIRST. The PyPI Linux wheels
+# bundle CUDA and add several GB to an image with no GPU to use it. Under
+# PEP 440 the resulting 2.11.0+cpu satisfies the ==2.11.0 pin, so the pass over
+# requirements.lock below leaves them alone rather than pulling the CUDA build.
+RUN pip install --upgrade pip \
+    && pip install --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.11.0 torchaudio==2.11.0 \
+    && pip install -r requirements.lock \
+    && python -c "import torch; assert '+cpu' in torch.__version__, \
+        f'expected a CPU build, got {torch.__version__}'; \
+        print('torch', torch.__version__)"
+
+# ── Models baked into the image ──────────────────────────────────────────────
+# Only the handful of files the downloader itself imports are copied here, so
+# this layer — the expensive one, ~1.7 GB — is not invalidated every time
+# application code changes.
+RUN mkdir -p /app/external && chown -R appuser:appuser /app/external
+COPY --chown=appuser:appuser src/__init__.py            ./src/
+COPY --chown=appuser:appuser src/core/__init__.py       ./src/core/
+COPY --chown=appuser:appuser src/core/console.py        ./src/core/
+COPY --chown=appuser:appuser scripts/download_models.py ./scripts/
 
 USER appuser
 
-# ── Pre-download RoBERTa into the image ──────────────────────────────────────
-# Without this the model is fetched on first boot, so the very first request
-# waits ~30s and a cold restart repeats it. Baking it in trades image size for
-# a fast, predictable start.
-RUN python -c "\
-from transformers import AutoTokenizer, AutoModelForSequenceClassification; \
-m='SamLowe/roberta-base-go_emotions'; \
-AutoTokenizer.from_pretrained(m); \
-AutoModelForSequenceClassification.from_pretrained(m); \
-print('RoBERTa cached into image')"
+# Exits non-zero if any of the five models fails, so a half-populated image can
+# never be published. That is the whole point: a container that starts without
+# its models does not crash, it serves "neutral" behind a green health check.
+RUN python scripts/download_models.py
+
+# ── Application ──────────────────────────────────────────────────────────────
+# Last, because it changes most often and everything above should stay cached.
+COPY --chown=appuser:appuser api.py    ./
+COPY --chown=appuser:appuser routers/  ./routers/
+COPY --chown=appuser:appuser schemas/  ./schemas/
+COPY --chown=appuser:appuser src/      ./src/
+COPY --chown=appuser:appuser frontend/ ./frontend/
+COPY --chown=appuser:appuser contract/ ./contract/
 
 # ── Runtime configuration ────────────────────────────────────────────────────
-# Text-only is the only mode this image can serve.
-ENV TEXT_ONLY_MODE=true \
-    # 7860 is the Hugging Face Spaces default. Other platforms inject $PORT.
-    PORT=7860
+ENV TEXT_ONLY_MODE=false \
+    PORT=8000 \
+    # Thread counts are pinned because PyTorch and OpenMP size their pools from
+    # the CPUs VISIBLE IN THE CONTAINER, and a 1-2 vCPU allocation on a shared
+    # host commonly still reports the host's full core count. Unpinned, three
+    # concurrent analysis stages each spawn 8-32 intra-op threads onto a
+    # fraction of one core — the difference between "slower than the laptop"
+    # and "unusable" on a system whose value proposition is live-call latency.
+    #
+    # These match the default INFERENCE_WORKERS=2. Raise them together with the
+    # instance size, and measure rather than assuming: more concurrent model
+    # instances on few cores has already been observed to be SLOWER, not faster.
+    OMP_NUM_THREADS=2 \
+    MKL_NUM_THREADS=2
 
-EXPOSE 7860
+EXPOSE 8000
 
 # API_KEYS is deliberately NOT set here. Provide it at runtime:
 #   docker run -e API_KEYS=...          or the platform's secrets UI.
-# Leaving it unset starts the server with authentication disabled and prints a
-# loud warning.
+# Leaving it unset starts the server with authentication DISABLED and prints a
+# loud banner saying so. There is no separate rule for local callers.
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+# Cloud Run and similar platforms ignore this and use their own probe, so point
+# theirs at /health too. start-period covers model load from a warm image
+# cache; the models are already on disk, so this is loading, not downloading.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD python -c "import urllib.request,os; \
-urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",7860)}/health').read()"
+urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",8000)}/health').read()"
 
-CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-7860}"]
+# --workers 1 is deliberate and load-bearing, not a default left unexamined.
+# Session state (src/streaming/unified_pipeline.py) and the live-call capacity
+# counter (routers/stream.py) are both per-process, so a second worker would
+# silently double MAX_ACTIVE_CALLS while doubling 1.6 GB of resident models.
+# Scale with instances, and keep it to one — see BACKLOG.md.
+CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
