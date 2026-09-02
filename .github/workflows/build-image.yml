@@ -1,0 +1,141 @@
+# Builds the container image on GitHub's runners and pushes it to the GitHub
+# Container Registry.
+#
+# Why this exists rather than building on a laptop
+# ------------------------------------------------
+# The image is roughly 5 GB: ~1.7 GB of models baked in, plus torch and the
+# rest of the Python stack. Building it locally means pulling all of that over
+# a home connection and then pushing 5 GB back up to a registry to deploy it.
+# Measured on the development machine, package downloads ran at 9-76 kB/s, which
+# puts the build at ~8 hours and the push at closer to 18 — and a push cannot
+# resume from a layer cache the way a build can.
+#
+# A runner pulls at datacenter speed and pushes to a registry inside the same
+# network. Only the repository itself — a few MB — leaves the laptop.
+#
+# After a successful run the image is at:
+#   ghcr.io/<owner>/<repo>:latest
+#
+# To deploy it, point the host at that tag. If the package is private, give the
+# host a pull token; GHCR packages start private and can be made public from the
+# repository's Packages settings.
+
+name: Build image
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      # Only rebuild when something that lands in the image changes. Docs and
+      # tests do not, and a 30-minute build for a typo helps nobody.
+      - "Dockerfile"
+      - ".dockerignore"
+      - "requirements.lock"
+      - "api.py"
+      - "routers/**"
+      - "schemas/**"
+      - "src/**"
+      - "frontend/**"
+      - "contract/**"
+      - "scripts/download_models.py"
+      - ".github/workflows/build-image.yml"
+  workflow_dispatch:        # so it can be run by hand from the Actions tab
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write       # required to push to GHCR
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # A standard ubuntu-latest runner has ~14 GB free, and this build wants
+      # most of it: the layer cache, the ~5 GB image, and the model download all
+      # compete for the same disk. Clearing the preinstalled toolchains buys
+      # roughly 25 GB and costs about a minute.
+      - name: Free up disk space
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo rm -rf /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          sudo docker image prune -af
+          echo "after:"; df -h / | tail -1
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to the container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # provided automatically
+
+      - name: Work out the tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub's own cache, so a rebuild reuses the expensive layers —
+          # apt, torch, and the ~1.7 GB model download — instead of repeating
+          # them. mode=max caches intermediate layers too, not just the final
+          # one, which is what makes the model step reusable.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Proves the image is genuinely self-contained. This is the whole point of
+      # baking the models in: if anything still reaches for the network at boot,
+      # a cold start on a platform with restricted egress serves "neutral"
+      # forever behind a green health check rather than failing loudly.
+      - name: Verify the image runs with no network at all
+        run: |
+          IMAGE=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          echo "testing $IMAGE"
+          docker run -d --name verify --network=none \
+            -e API_KEYS=ci-test-key -e PORT=8000 "$IMAGE"
+
+          # Model load from a warm image takes well under a minute, but give it
+          # room on a shared runner.
+          for i in $(seq 1 60); do
+            if docker logs verify 2>&1 | grep -q "API ready"; then
+              echo "ready after ~$((i*5))s"; break
+            fi
+            if ! docker ps --format '{{.Names}}' | grep -q '^verify$'; then
+              echo "container exited early:"; docker logs verify; exit 1
+            fi
+            sleep 5
+          done
+
+          echo "---- startup log ----"
+          docker logs verify 2>&1 | tail -40
+
+          echo "---- every model must have loaded ----"
+          for m in roberta whisper faster_whisper speechbrain; do
+            docker logs verify 2>&1 | grep -q "$m" \
+              || { echo "MISSING: $m"; exit 1; }
+          done
+
+          docker logs verify 2>&1 | grep -q "All models ready" \
+            || { echo "registry did not report all models ready"; exit 1; }
+
+          docker rm -f verify
+          echo "self-contained: no network was available and every model loaded"

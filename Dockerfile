@@ -32,10 +32,19 @@ FROM python:3.10-slim
 # libgl1 and libglib2.0-0 are for OpenCV, which mediapipe depends on. The
 # non-headless opencv wheel links against libGL, so `import cv2` — and therefore
 # all face analysis — fails on a bare slim image without them.
+#
+# libportaudio2 is here because mediapipe declares sounddevice~=0.5 as a hard
+# dependency, so pip installs it whether or not this project wants it —
+# excluding it from requirements.lock does not stop that. sounddevice loads
+# libportaudio at import, and without the system library that import raises
+# OSError. The server opens no audio device and never calls it deliberately,
+# but anything that merely imports it would fail, so the ~100 KB is worth more
+# than the argument.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         libgl1 \
         libglib2.0-0 \
+        libportaudio2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Hugging Face Spaces runs containers as UID 1000 and expects a writable home.
@@ -45,7 +54,6 @@ RUN useradd -m -u 1000 appuser
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     # The project logs emoji and box-drawing characters. Containers default to
     # ASCII, which would raise UnicodeEncodeError on the first log line.
@@ -70,15 +78,36 @@ WORKDIR /app
 # healthy, and answers "neutral" forever. See the header of requirements.lock.
 COPY --chown=appuser:appuser requirements.lock ./
 
+# These are three separate RUN steps on purpose, each with a BuildKit pip cache
+# mount. Both details are about surviving a bad connection rather than style.
+#
+# Separate steps mean a failure part-way through does not throw away the work
+# that already succeeded: torch alone is a 190 MB download, and as one combined
+# step it was re-fetched from scratch on every retry.
+#
+# The cache mount keeps downloaded wheels OUTSIDE the image, in BuildKit's own
+# cache, so a retry reuses them without re-downloading and the image carries no
+# extra weight. PIP_NO_CACHE_DIR is deliberately not set — it would disable the
+# very cache this relies on. On a link that has dropped to 19 kB/s mid-download,
+# this is the difference between a retry costing seconds and costing half an
+# hour.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip
+
 # torch and torchaudio come from the CPU index FIRST. The PyPI Linux wheels
 # bundle CUDA and add several GB to an image with no GPU to use it. Under
 # PEP 440 the resulting 2.11.0+cpu satisfies the ==2.11.0 pin, so the pass over
 # requirements.lock below leaves them alone rather than pulling the CUDA build.
-RUN pip install --upgrade pip \
-    && pip install --index-url https://download.pytorch.org/whl/cpu \
-        torch==2.11.0 torchaudio==2.11.0 \
-    && pip install -r requirements.lock \
-    && python -c "import torch; assert '+cpu' in torch.__version__, \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.11.0 torchaudio==2.11.0
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.lock
+
+# Fail the build rather than ship a CUDA torch by accident. The check is cheap
+# and the mistake is expensive: several GB of libraries no CPU host can use.
+RUN python -c "import torch; assert '+cpu' in torch.__version__, \
         f'expected a CPU build, got {torch.__version__}'; \
         print('torch', torch.__version__)"
 

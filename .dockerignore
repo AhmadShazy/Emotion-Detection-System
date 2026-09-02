@@ -23,8 +23,13 @@ data/
 .git/
 .gitignore
 .vscode/
+.claude/
 .idea/
 *.log
+
+# CI definitions describe how the image is built; they are not part of it.
+.github/
+cloudbuild.yaml
 
 # Docs and tests are not needed at runtime.
 # contract/payloads IS needed — the /mock endpoints serve it.

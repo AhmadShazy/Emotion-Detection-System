@@ -27,6 +27,23 @@
 # Dockerfile does this as a separate step; under PEP 440 a local version like
 # 2.11.0+cpu satisfies ==2.11.0, so the pass over this file leaves them alone.
 #
+# A caveat: this was frozen on WINDOWS
+# ------------------------------------
+# So it is a complete record of the environment the tests pass in, but not a
+# complete record of what a Linux image ends up with. Two packages have no
+# Windows wheels and therefore cannot appear here, yet install in the container
+# as hard dependencies of things that are pinned:
+#
+#   triton       required by openai-whisper. ~200 MB of GPU compiler that a CPU
+#                deployment never executes, and not removable without dropping
+#                openai-whisper's own dependency metadata.
+#   sounddevice  required by mediapipe. Excluded below and reinstalled anyway,
+#                which is why the Dockerfile installs libportaudio2.
+#
+# pip resolves those two freely, so they are the part of the image this file
+# does not actually pin. To close the gap properly, run pip freeze INSIDE the
+# built image and commit that as the authoritative lock.
+#
 # Regenerating
 # ------------
 #   pip freeze > requirements.lock    then re-apply the exclusions below
@@ -34,7 +51,8 @@
 # Do that deliberately, after upgrading and re-running the tests - never as a
 # routine tidy-up.
 #
-# Excluded from the freeze on purpose:
+# Excluded from the freeze on purpose (note: pip may reinstall them anyway as
+# transitive dependencies - see the caveat above):
 #   pyreadline3    Windows-only readline shim
 #   sounddevice    needs the PortAudio system library, and no request path uses it - the server owns no capture device
 #
