@@ -22,85 +22,18 @@ if PROJECT_ROOT not in sys.path:
 
 def _apply_patches():
     """
-    Compatibility patches for SpeechBrain 1.0.3 + newer libs.
-    Order matters — torchaudio must be patched before speechbrain import.
-    Still called here so ser_engine works correctly when used standalone
-    via CLI (main.py). Registry calls its own copy before loading the model.
+    Prepares the interpreter for SpeechBrain when this module is used
+    standalone via the CLI. The registry applies the same patches before it
+    loads the model.
+
+    The body used to be a copy of the registry's, and a third partial copy
+    lived in scripts/download_models.py. That one omitted the LazyModule patch,
+    so the downloader failed on speechbrain 1.1.0 while the server loaded the
+    identical model — the copy that was wrong was the one a Docker build
+    depends on. There is now one definition, in src/core/speechbrain_compat.py.
     """
-    # ── Patch 1: torchaudio — MUST come first ─────────────────────────────────
-    if not hasattr(torchaudio, "list_audio_backends"):
-        torchaudio.list_audio_backends = lambda: ["soundfile"]
-
-    if not hasattr(torchaudio, "get_audio_backend"):
-        torchaudio.get_audio_backend = lambda: "soundfile"
-
-    if not getattr(torchaudio, "_patched_by_ser_engine", False):
-        torchaudio.load = _custom_load
-        torchaudio._patched_by_ser_engine = True
-
-    # ── Patch 2: transformers removed AutoModelWithLMHead in v5 ──────────────
-    import transformers
-    if not hasattr(transformers, "AutoModelWithLMHead"):
-        transformers.AutoModelWithLMHead = getattr(
-            transformers, "AutoModelForCausalLM", transformers.AutoModel
-        )
-
-    # ── Patch 3: huggingface_hub dropped use_auth_token param ─────────────────
-    import huggingface_hub
-    if not getattr(huggingface_hub, "_patched_by_ser_engine", False):
-        _original = huggingface_hub.hf_hub_download
-
-        def _patched(*args, **kwargs):
-            if "use_auth_token" in kwargs:
-                kwargs["token"] = kwargs.pop("use_auth_token")
-            return _original(*args, **kwargs)
-
-        huggingface_hub.hf_hub_download        = _patched
-        huggingface_hub._patched_by_ser_engine = True
-
-    # ── Cross-platform inspect patch for SpeechBrain LazyModule ──
-    try:
-        from speechbrain.utils.importutils import LazyModule
-        import importlib
-        import warnings
-        from types import ModuleType
-
-        def _patched_ensure_module(self, stacklevel: int) -> ModuleType:
-            import sys
-            import os
-            import inspect
-            importer_frame = None
-            try:
-                importer_frame = inspect.getframeinfo(sys._getframe(stacklevel + 1))
-            except AttributeError:
-                warnings.warn(
-                    "Failed to inspect frame to check if we should ignore "
-                    "importing a module lazily."
-                )
-
-            if importer_frame is not None and (
-                importer_frame.filename.endswith("/inspect.py") or
-                importer_frame.filename.endswith("\\inspect.py") or
-                os.path.basename(importer_frame.filename) == "inspect.py"
-            ):
-                raise AttributeError()
-
-            if self.lazy_module is None:
-                try:
-                    if self.package is None:
-                        self.lazy_module = importlib.import_module(self.target)
-                    else:
-                        self.lazy_module = importlib.import_module(
-                            f".{self.target}", self.package
-                        )
-                except Exception as e:
-                    raise ImportError(f"Lazy import of {repr(self)} failed") from e
-
-            return self.lazy_module
-
-        LazyModule.ensure_module = _patched_ensure_module
-    except Exception as pe:
-        print(f"[SEREngine] Warning: LazyModule patch failed: {pe}")
+    from src.core.speechbrain_compat import apply_patches
+    apply_patches()
 
 
 def _custom_load(filepath, **kwargs):

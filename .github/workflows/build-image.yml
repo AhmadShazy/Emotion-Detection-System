@@ -1,0 +1,146 @@
+# Builds the container image on GitHub's runners and pushes it to the GitHub
+# Container Registry.
+#
+# Why this exists rather than building on a laptop
+# ------------------------------------------------
+# The image is roughly 5 GB: ~1.7 GB of models baked in, plus torch and the
+# rest of the Python stack. Building it locally means pulling all of that over
+# a home connection and then pushing 5 GB back up to a registry to deploy it.
+# Measured on the development machine, package downloads ran at 9-76 kB/s, which
+# puts the build at ~8 hours and the push at closer to 18 — and a push cannot
+# resume from a layer cache the way a build can.
+#
+# A runner pulls at datacenter speed and pushes to a registry inside the same
+# network. Only the repository itself — a few MB — leaves the laptop.
+#
+# After a successful run the image is at:
+#   ghcr.io/<owner>/<repo>:latest
+#
+# To deploy it, point the host at that tag. If the package is private, give the
+# host a pull token; GHCR packages start private and can be made public from the
+# repository's Packages settings.
+
+name: Build image
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      # Only rebuild when something that lands in the image changes. Docs and
+      # tests do not, and a 30-minute build for a typo helps nobody.
+      - "Dockerfile"
+      - ".dockerignore"
+      - "requirements.lock"
+      - "api.py"
+      - "routers/**"
+      - "schemas/**"
+      - "src/**"
+      - "frontend/**"
+      - "contract/**"
+      # scripts/** rather than just download_models.py: verify_image.sh is now
+      # the entire definition of "verified", and a commit that only tightens a
+      # check there would otherwise trigger nothing — the push would show no
+      # run at all, which reads as "nothing needed rebuilding".
+      - "scripts/**"
+      - ".github/workflows/build-image.yml"
+  workflow_dispatch:        # so it can be run by hand from the Actions tab
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write       # required to push to GHCR
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # A standard ubuntu-latest runner has ~14 GB free, and this build wants
+      # most of it: the layer cache, the ~5 GB image, and the model download all
+      # compete for the same disk. Clearing the preinstalled toolchains buys
+      # roughly 25 GB and costs about a minute.
+      - name: Free up disk space
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo rm -rf /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          sudo docker image prune -af
+          echo "after:"; df -h / | tail -1
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to the container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # provided automatically
+
+      # A container repository name must be lowercase, and this one is
+      # AhmadShazy/Emotion-Detection-System. Using github.repository directly
+      # would produce ghcr.io/AhmadShazy/Emotion-Detection-System and the push
+      # would be rejected. metadata-action lowercases what it emits, but
+      # anything built by hand from the raw variable — like the digest
+      # reference in the verify step — would not be.
+      - name: Lowercase the image name
+        id: img
+        run: echo "name=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_NAME: ${{ github.repository }}
+
+      - name: Work out the tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        id: build            # the verify step needs outputs.digest
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Registry cache rather than type=gha, for two reasons that both bite
+          # this repository specifically. Actions caches are BRANCH-SCOPED, so a
+          # cache written by a dev build is not readable from the main build —
+          # and feat -> dev -> main is exactly the flow here, meaning the
+          # expensive layers would be rebuilt on the merge that matters most.
+          # They also accumulate 2.5-3.5 GB entries against a 10 GB repository
+          # cap and get evicted. Neither failure is loud: BuildKit reports cache
+          # trouble as a warning, so the cache would simply quietly stop working.
+          #
+          # packages: write already covers pushing this. It lands as a separate
+          # :buildcache tag alongside the real image tags.
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.img.outputs.name }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.img.outputs.name }}:buildcache,mode=max
+
+      # Proves the image is genuinely self-contained. This is the whole point of
+      # baking the models in: if anything still reaches for the network at boot,
+      # a cold start on a platform with restricted egress serves "neutral"
+      # forever behind a green health check rather than failing loudly.
+      #
+      # The checks live in scripts/verify_image.sh so this workflow and
+      # cloudbuild.yaml cannot drift apart about what "verified" means.
+      #
+      # build-push-action with push: true does not necessarily leave the image
+      # in the local daemon, so pull it back by digest before testing — that
+      # also means what gets tested is exactly what was pushed, rather than a
+      # local artefact that merely resembles it.
+      - name: Verify the pushed image runs with no network at all
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ steps.img.outputs.name }}@${{ steps.build.outputs.digest }}"
+          echo "pulling $IMAGE"
+          docker pull "$IMAGE"
+          bash scripts/verify_image.sh "$IMAGE"

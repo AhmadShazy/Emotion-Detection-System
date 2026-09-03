@@ -1,0 +1,29 @@
+# Line endings.
+#
+# Development happens on Windows; the image and both CI pipelines run on Linux.
+# A shell script committed with CRLF fails there as
+#
+#     /usr/bin/env: 'bash\r': No such file or directory
+#
+# which reads like a missing interpreter rather than a line-ending problem and
+# costs a full CI cycle to work out. The same applies to the Dockerfile and the
+# CI YAML. Pinning these to LF makes it independent of whatever core.autocrlf
+# any given clone happens to have.
+
+* text=auto eol=lf
+
+*.sh          text eol=lf
+Dockerfile    text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+
+# Binary, never touched.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.wav  binary
+*.mp4  binary
+*.webm binary
+*.task binary
+*.ckpt binary
+*.pt   binary

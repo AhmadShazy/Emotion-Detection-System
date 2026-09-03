@@ -129,6 +129,7 @@ class ModelRegistry:
 
     def _load_speechbrain(self):
         self._apply_speechbrain_patches()
+        from src.core.speechbrain_compat import fetch_kwargs
         from speechbrain.inference.interfaces import foreign_class
         self._models["speechbrain"] = foreign_class(
             source="speechbrain/emotion-recognition-wav2vec2-IEMOCAP",
@@ -136,89 +137,22 @@ class ModelRegistry:
             classname="CustomEncoderWav2vec2Classifier",
             savedir=SPEECHBRAIN_CACHE,
             run_opts={"device": "cpu"},
+            # Same fetch behaviour as the downloader, so what the image bakes in
+            # is what the server expects to find.
+            **fetch_kwargs(),
         )
 
     def _apply_speechbrain_patches(self):
-        import torchaudio
-        import soundfile as sf
-        import numpy as np
-        import torch
+        """
+        Delegates to the single definition in src/core/speechbrain_compat.py.
 
-        if not hasattr(torchaudio, "list_audio_backends"):
-            torchaudio.list_audio_backends = lambda: ["soundfile"]
-        if not hasattr(torchaudio, "get_audio_backend"):
-            torchaudio.get_audio_backend = lambda: "soundfile"
-        if not getattr(torchaudio, "_patched_by_ser_engine", False):
-            def _custom_load(filepath, **kwargs):
-                data, samplerate = sf.read(filepath)
-                data = data.astype(np.float32)
-                if data.ndim == 1:
-                    tensor = torch.from_numpy(data).unsqueeze(0)
-                else:
-                    tensor = torch.from_numpy(data.transpose())
-                return tensor, samplerate
-            torchaudio.load = _custom_load
-            torchaudio._patched_by_ser_engine = True
-
-        import transformers
-        if not hasattr(transformers, "AutoModelWithLMHead"):
-            transformers.AutoModelWithLMHead = getattr(
-                transformers, "AutoModelForCausalLM", transformers.AutoModel
-            )
-
-        import huggingface_hub
-        if not getattr(huggingface_hub, "_patched_by_ser_engine", False):
-            _original = huggingface_hub.hf_hub_download
-            def _patched(*args, **kwargs):
-                if "use_auth_token" in kwargs:
-                    kwargs["token"] = kwargs.pop("use_auth_token")
-                return _original(*args, **kwargs)
-            huggingface_hub.hf_hub_download        = _patched
-            huggingface_hub._patched_by_ser_engine = True
-
-        # ── Cross-platform inspect patch for SpeechBrain LazyModule ──
-        try:
-            from speechbrain.utils.importutils import LazyModule
-            import importlib
-            import warnings
-            from types import ModuleType
-
-            def _patched_ensure_module(self, stacklevel: int) -> ModuleType:
-                import sys
-                import os
-                import inspect
-                importer_frame = None
-                try:
-                    importer_frame = inspect.getframeinfo(sys._getframe(stacklevel + 1))
-                except AttributeError:
-                    warnings.warn(
-                        "Failed to inspect frame to check if we should ignore "
-                        "importing a module lazily."
-                    )
-
-                if importer_frame is not None and (
-                    importer_frame.filename.endswith("/inspect.py") or
-                    importer_frame.filename.endswith("\\inspect.py") or
-                    os.path.basename(importer_frame.filename) == "inspect.py"
-                ):
-                    raise AttributeError()
-
-                if self.lazy_module is None:
-                    try:
-                        if self.package is None:
-                            self.lazy_module = importlib.import_module(self.target)
-                        else:
-                            self.lazy_module = importlib.import_module(
-                                f".{self.target}", self.package
-                            )
-                    except Exception as e:
-                        raise ImportError(f"Lazy import of {repr(self)} failed") from e
-
-                return self.lazy_module
-
-            LazyModule.ensure_module = _patched_ensure_module
-        except Exception as pe:
-            print(f"[Registry] Warning: LazyModule patch failed: {pe}")
+        This body used to be a copy. So did SEREngine's, and a third partial
+        copy in scripts/download_models.py that omitted the LazyModule patch —
+        which is why the downloader failed on speechbrain 1.1.0 while the
+        server loaded the same model without complaint.
+        """
+        from src.core.speechbrain_compat import apply_patches
+        apply_patches()
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────

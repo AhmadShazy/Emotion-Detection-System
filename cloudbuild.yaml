@@ -1,0 +1,159 @@
+# Google Cloud Build — builds the image inside GCP and pushes it to Artifact
+# Registry, ready for Cloud Run.
+#
+# Why build here rather than locally
+# ----------------------------------
+# The image is ~5 GB (roughly 1.7 GB of models plus torch and the rest of the
+# stack). Measured on the development machine, package downloads ran at
+# 9-76 kB/s: about 8 hours to build and closer to 18 to push, and a push cannot
+# resume from a layer cache the way a build can. Cloud Build pulls at datacenter
+# speed and pushes to a registry in the same network, so only the repository
+# leaves the laptop.
+#
+# One-time setup
+# --------------
+#   gcloud services enable cloudbuild.googleapis.com artifactregistry.googleapis.com run.googleapis.com
+#   gcloud artifacts repositories create humanoid --repository-format=docker --location=us-central1
+#
+# Run it
+# ------
+#   gcloud builds submit --config cloudbuild.yaml
+#
+# Override the region or repository without editing this file:
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions=_REGION=europe-west1,_REPO=humanoid
+
+substitutions:
+  _REGION: us-central1
+  _REPO: humanoid
+  _IMAGE: humanoid-input
+  # Deliberately not the SHORT_SHA built-in. That is populated only for builds
+  # started from a repository trigger; `gcloud builds submit` uploads a tarball,
+  # so there is no git metadata and it resolves to the EMPTY STRING. It is still
+  # a defined key, so validation does not catch it — the tag becomes
+  # "humanoid-input:" and docker rejects it with "invalid reference format",
+  # after the full build if only the push tag was affected. A substitution with
+  # a default cannot silently resolve to nothing when the flag is forgotten.
+  #
+  # Pass the real thing when you want it:
+  #   --substitutions=_TAG=$(git rev-parse --short HEAD)
+  _TAG: manual
+
+options:
+  # The default machine has too little disk and CPU for a 5 GB image with a
+  # 1.7 GB model download. This costs more per minute and far less in total,
+  # because the build is not sitting waiting on itself.
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 100
+  logging: CLOUD_LOGGING_ONLY
+
+# The default is 10 minutes, which this build cannot possibly meet — installing
+# torch and downloading five models takes longer than that even on a fast link.
+# Leaving it at the default is the most common way a first Cloud Build attempt
+# fails, and the error looks like a timeout rather than anything diagnostic.
+#
+# Two hours rather than one because this single budget has to cover the 5 GB
+# warm pull, apt, the full pip pass, the ~1.7 GB model bake, a verify step that
+# boots the image, AND the ~5 GB push of the `images:` list. A realistic run is
+# 30-45 minutes, but a timeout kill discards a successfully built image that was
+# never pushed. Cloud Build charges for minutes used, so the higher ceiling is
+# free insurance.
+timeout: 7200s
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}"
+
+steps:
+  # Pull the previous image, if any, so its layers can be reused. Without this
+  # every build repeats the ~1.7 GB model download from scratch. The || true
+  # matters: the very first build has nothing to pull and must not fail here.
+  - id: warm-cache
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        docker pull "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest" || true
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    # DOCKER_BUILDKIT=1 is REQUIRED, not a preference. The Dockerfile uses
+    # `RUN --mount=type=cache` for the pip steps, which is BuildKit-only syntax;
+    # the classic builder in this image rejects it while parsing the Dockerfile
+    # ("the --mount option requires BuildKit"), so the build dies in seconds and
+    # the error points at a line that looks perfectly valid. The GitHub path is
+    # unaffected — buildx is BuildKit by construction.
+    env: ['DOCKER_BUILDKIT=1']
+    args:
+      - build
+      # Under BuildKit, --cache-from against a registry tag needs a cache
+      # manifest on that ref, and an image pushed by the `images:` list carries
+      # none. Without inline cache the warm-cache pull above spends minutes
+      # fetching 5 GB for zero cache hits — silently. The first build after this
+      # lands still gets nothing; the second one benefits.
+      - --build-arg
+      - BUILDKIT_INLINE_CACHE=1
+      - --cache-from=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}
+      - .
+
+  # Proves the image is self-contained. Baking the models in is pointless if
+  # something still reaches for the network at boot — on a host with restricted
+  # egress that produces a server which starts, passes its health check, and
+  # answers "neutral" forever. Better to fail here than to discover it live.
+  # The checks live in scripts/verify_image.sh, shared with the GitHub Actions
+  # workflow, so the two pipelines cannot drift apart about what "verified"
+  # means. Keeping the inline shell here to a single line also sidesteps Cloud
+  # Build's substitution rules, which require every shell $ to be written $$
+  # and turn a missed one into a confusing build-time substitution error.
+  - id: verify-offline
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - scripts/verify_image.sh
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Deploying what this produces
+#
+# Written as literals: substitutions do NOT apply inside a comment, so pasting
+# a ${_REGION} form into a shell would expand it to nothing and produce
+# "--image=-docker.pkg.dev///:latest". Every other command in this file is
+# copy-pasteable, so these two must be as well. Swap in your own project id.
+#
+#   gcloud run deploy humanoid-input \
+#     --image=us-central1-docker.pkg.dev/YOUR_PROJECT/humanoid/humanoid-input:latest \
+#     --region=us-central1 \
+#     --memory=4Gi \
+#     --cpu=2 \
+#     --timeout=3600 \
+#     --max-instances=1 \
+#     --concurrency=4 \
+#     --set-secrets=API_KEYS=humanoid-api-keys:latest \
+#     --allow-unauthenticated
+#
+# Each of those flags is load-bearing, not a default worth trimming:
+#
+#   --memory=4Gi      measured resident set is 1.54 GB with every model loaded.
+#                     2 GB does not fit. 4 GB works because the models are baked
+#                     into the image rather than downloaded into memory at boot.
+#   --timeout=3600    Cloud Run applies its request timeout to WEBSOCKETS too,
+#                     and the default 300 s severs a live call mid-conversation
+#                     at five minutes.
+#   --max-instances=1 session state and the live-call capacity counter are both
+#                     per-process. A second instance treats a known session_id
+#                     as brand new, and Cloud Run scales on CPU — which this app
+#                     pins during exactly the requests that matter, so a second
+#                     instance appears precisely when someone is using it.
+#   --concurrency=4   the admission control this app does not implement itself.
+#   --set-secrets     never pass API_KEYS as a plain env var. Leaving it unset
+#                     starts the server with authentication disabled.
+#
+# The frontend is served by the app, so --allow-unauthenticated is right: the
+# API key gates /analyze/* and /ws/stream, and Cloud Run's own IAM would block
+# the browser before it could present one.
+# ─────────────────────────────────────────────────────────────────────────────
