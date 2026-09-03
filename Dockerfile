@@ -99,11 +99,19 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # PEP 440 the resulting 2.11.0+cpu satisfies the ==2.11.0 pin, so the pass over
 # requirements.lock below leaves them alone rather than pulling the CUDA build.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --index-url https://download.pytorch.org/whl/cpu \
+    pip install --retries 10 --timeout 120 \
+        --index-url https://download.pytorch.org/whl/cpu \
         torch==2.11.0 torchaudio==2.11.0
 
+# --retries and --timeout are not decoration. On a flaky link this step failed
+# on ctranslate2 with "from versions: none" -- not a missing wheel (the cp310
+# manylinux build exists and matches this image) but an index request that came
+# back empty, which pip reports as though the package does not exist. Every
+# other package in the same run downloaded normally. Ten retries and a longer
+# timeout cost nothing on a good connection and stop a bad one from discarding
+# half an hour of work over one dropped request.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.lock
+    pip install --retries 10 --timeout 120 -r requirements.lock
 
 # Fail the build rather than ship a CUDA torch by accident. The check is cheap
 # and the mistake is expensive: several GB of libraries no CPU host can use.

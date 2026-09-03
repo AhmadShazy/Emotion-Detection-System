@@ -78,17 +78,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}   # provided automatically
 
+      # A container repository name must be lowercase, and this one is
+      # AhmadShazy/Emotion-Detection-System. Using github.repository directly
+      # would produce ghcr.io/AhmadShazy/Emotion-Detection-System and the push
+      # would be rejected. metadata-action lowercases what it emits, but
+      # anything built by hand from the raw variable — like the digest
+      # reference in the verify step — would not be.
+      - name: Lowercase the image name
+        id: img
+        run: echo "name=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_NAME: ${{ github.repository }}
+
       - name: Work out the tags
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}
           tags: |
             type=ref,event=branch
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
+        id: build            # the verify step needs outputs.digest
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -106,36 +119,17 @@ jobs:
       # baking the models in: if anything still reaches for the network at boot,
       # a cold start on a platform with restricted egress serves "neutral"
       # forever behind a green health check rather than failing loudly.
-      - name: Verify the image runs with no network at all
+      #
+      # The checks live in scripts/verify_image.sh so this workflow and
+      # cloudbuild.yaml cannot drift apart about what "verified" means.
+      #
+      # build-push-action with push: true does not necessarily leave the image
+      # in the local daemon, so pull it back by digest before testing — that
+      # also means what gets tested is exactly what was pushed, rather than a
+      # local artefact that merely resembles it.
+      - name: Verify the pushed image runs with no network at all
         run: |
-          IMAGE=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
-          echo "testing $IMAGE"
-          docker run -d --name verify --network=none \
-            -e API_KEYS=ci-test-key -e PORT=8000 "$IMAGE"
-
-          # Model load from a warm image takes well under a minute, but give it
-          # room on a shared runner.
-          for i in $(seq 1 60); do
-            if docker logs verify 2>&1 | grep -q "API ready"; then
-              echo "ready after ~$((i*5))s"; break
-            fi
-            if ! docker ps --format '{{.Names}}' | grep -q '^verify$'; then
-              echo "container exited early:"; docker logs verify; exit 1
-            fi
-            sleep 5
-          done
-
-          echo "---- startup log ----"
-          docker logs verify 2>&1 | tail -40
-
-          echo "---- every model must have loaded ----"
-          for m in roberta whisper faster_whisper speechbrain; do
-            docker logs verify 2>&1 | grep -q "$m" \
-              || { echo "MISSING: $m"; exit 1; }
-          done
-
-          docker logs verify 2>&1 | grep -q "All models ready" \
-            || { echo "registry did not report all models ready"; exit 1; }
-
-          docker rm -f verify
-          echo "self-contained: no network was available and every model loaded"
+          IMAGE="${{ env.REGISTRY }}/${{ steps.img.outputs.name }}@${{ steps.build.outputs.digest }}"
+          echo "pulling $IMAGE"
+          docker pull "$IMAGE"
+          bash scripts/verify_image.sh "$IMAGE"

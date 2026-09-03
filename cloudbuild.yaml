@@ -73,42 +73,17 @@ steps:
   # something still reaches for the network at boot — on a host with restricted
   # egress that produces a server which starts, passes its health check, and
   # answers "neutral" forever. Better to fail here than to discover it live.
+  # The checks live in scripts/verify_image.sh, shared with the GitHub Actions
+  # workflow, so the two pipelines cannot drift apart about what "verified"
+  # means. Keeping the inline shell here to a single line also sidesteps Cloud
+  # Build's substitution rules, which require every shell $ to be written $$
+  # and turn a missed one into a confusing build-time substitution error.
   - id: verify-offline
     name: gcr.io/cloud-builders/docker
     entrypoint: bash
     args:
-      - -c
-      - |
-        set -e
-        IMAGE="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest"
-        docker run -d --name verify --network=none \
-          -e API_KEYS=ci-test-key -e PORT=8000 "$$IMAGE"
-
-        for i in $$(seq 1 60); do
-          if docker logs verify 2>&1 | grep -q "API ready"; then
-            echo "ready after ~$$((i*5))s"
-            break
-          fi
-          if ! docker ps --format '{{.Names}}' | grep -q '^verify$$'; then
-            echo "container exited early:"
-            docker logs verify
-            exit 1
-          fi
-          sleep 5
-        done
-
-        echo "---- startup log ----"
-        docker logs verify 2>&1 | tail -40
-
-        echo "---- every model must have loaded ----"
-        for m in roberta whisper faster_whisper speechbrain; do
-          docker logs verify 2>&1 | grep -q "$$m" || { echo "MISSING: $$m"; exit 1; }
-        done
-        docker logs verify 2>&1 | grep -q "All models ready" \
-          || { echo "registry did not report all models ready"; exit 1; }
-
-        docker rm -f verify
-        echo "self-contained: no network was available and every model loaded"
+      - scripts/verify_image.sh
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Deploying what this produces
