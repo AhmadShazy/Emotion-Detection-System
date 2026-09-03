@@ -27,6 +27,17 @@ substitutions:
   _REGION: us-central1
   _REPO: humanoid
   _IMAGE: humanoid-input
+  # Deliberately not the SHORT_SHA built-in. That is populated only for builds
+  # started from a repository trigger; `gcloud builds submit` uploads a tarball,
+  # so there is no git metadata and it resolves to the EMPTY STRING. It is still
+  # a defined key, so validation does not catch it — the tag becomes
+  # "humanoid-input:" and docker rejects it with "invalid reference format",
+  # after the full build if only the push tag was affected. A substitution with
+  # a default cannot silently resolve to nothing when the flag is forgotten.
+  #
+  # Pass the real thing when you want it:
+  #   --substitutions=_TAG=$(git rev-parse --short HEAD)
+  _TAG: manual
 
 options:
   # The default machine has too little disk and CPU for a 5 GB image with a
@@ -40,11 +51,18 @@ options:
 # torch and downloading five models takes longer than that even on a fast link.
 # Leaving it at the default is the most common way a first Cloud Build attempt
 # fails, and the error looks like a timeout rather than anything diagnostic.
-timeout: 3600s
+#
+# Two hours rather than one because this single budget has to cover the 5 GB
+# warm pull, apt, the full pip pass, the ~1.7 GB model bake, a verify step that
+# boots the image, AND the ~5 GB push of the `images:` list. A realistic run is
+# 30-45 minutes, but a timeout kill discards a successfully built image that was
+# never pushed. Cloud Build charges for minutes used, so the higher ceiling is
+# free insurance.
+timeout: 7200s
 
 images:
   - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest"
-  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${SHORT_SHA}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}"
 
 steps:
   # Pull the previous image, if any, so its layers can be reused. Without this
@@ -60,13 +78,27 @@ steps:
 
   - id: build
     name: gcr.io/cloud-builders/docker
+    # DOCKER_BUILDKIT=1 is REQUIRED, not a preference. The Dockerfile uses
+    # `RUN --mount=type=cache` for the pip steps, which is BuildKit-only syntax;
+    # the classic builder in this image rejects it while parsing the Dockerfile
+    # ("the --mount option requires BuildKit"), so the build dies in seconds and
+    # the error points at a line that looks perfectly valid. The GitHub path is
+    # unaffected — buildx is BuildKit by construction.
+    env: ['DOCKER_BUILDKIT=1']
     args:
       - build
+      # Under BuildKit, --cache-from against a registry tag needs a cache
+      # manifest on that ref, and an image pushed by the `images:` list carries
+      # none. Without inline cache the warm-cache pull above spends minutes
+      # fetching 5 GB for zero cache hits — silently. The first build after this
+      # lands still gets nothing; the second one benefits.
+      - --build-arg
+      - BUILDKIT_INLINE_CACHE=1
       - --cache-from=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
       - -t
       - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
       - -t
-      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${SHORT_SHA}
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}
       - .
 
   # Proves the image is self-contained. Baking the models in is pointless if
@@ -88,9 +120,14 @@ steps:
 # ─────────────────────────────────────────────────────────────────────────────
 # Deploying what this produces
 #
+# Written as literals: substitutions do NOT apply inside a comment, so pasting
+# a ${_REGION} form into a shell would expand it to nothing and produce
+# "--image=-docker.pkg.dev///:latest". Every other command in this file is
+# copy-pasteable, so these two must be as well. Swap in your own project id.
+#
 #   gcloud run deploy humanoid-input \
-#     --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest \
-#     --region=${_REGION} \
+#     --image=us-central1-docker.pkg.dev/YOUR_PROJECT/humanoid/humanoid-input:latest \
+#     --region=us-central1 \
 #     --memory=4Gi \
 #     --cpu=2 \
 #     --timeout=3600 \

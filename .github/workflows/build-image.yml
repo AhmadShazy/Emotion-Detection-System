@@ -37,7 +37,11 @@ on:
       - "src/**"
       - "frontend/**"
       - "contract/**"
-      - "scripts/download_models.py"
+      # scripts/** rather than just download_models.py: verify_image.sh is now
+      # the entire definition of "verified", and a commit that only tightens a
+      # check there would otherwise trigger nothing — the push would show no
+      # run at all, which reads as "nothing needed rebuilding".
+      - "scripts/**"
       - ".github/workflows/build-image.yml"
   workflow_dispatch:        # so it can be run by hand from the Actions tab
 
@@ -108,12 +112,19 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # GitHub's own cache, so a rebuild reuses the expensive layers —
-          # apt, torch, and the ~1.7 GB model download — instead of repeating
-          # them. mode=max caches intermediate layers too, not just the final
-          # one, which is what makes the model step reusable.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Registry cache rather than type=gha, for two reasons that both bite
+          # this repository specifically. Actions caches are BRANCH-SCOPED, so a
+          # cache written by a dev build is not readable from the main build —
+          # and feat -> dev -> main is exactly the flow here, meaning the
+          # expensive layers would be rebuilt on the merge that matters most.
+          # They also accumulate 2.5-3.5 GB entries against a 10 GB repository
+          # cap and get evicted. Neither failure is loud: BuildKit reports cache
+          # trouble as a warning, so the cache would simply quietly stop working.
+          #
+          # packages: write already covers pushing this. It lands as a separate
+          # :buildcache tag alongside the real image tags.
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.img.outputs.name }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.img.outputs.name }}:buildcache,mode=max
 
       # Proves the image is genuinely self-contained. This is the whole point of
       # baking the models in: if anything still reaches for the network at boot,

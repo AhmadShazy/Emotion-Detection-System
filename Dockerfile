@@ -123,10 +123,25 @@ RUN python -c "import torch; assert '+cpu' in torch.__version__, \
 # Only the handful of files the downloader itself imports are copied here, so
 # this layer — the expensive one, ~1.7 GB — is not invalidated every time
 # application code changes.
-RUN mkdir -p /app/external && chown -R appuser:appuser /app/external
+# WORKDIR created /app while USER was still root, so it is root-owned. The
+# application runs as appuser and creates data/recordings, data/processed and
+# data/jobs at startup (api.py, in the lifespan handler, before the models
+# load) — unguarded, so a PermissionError there means uvicorn logs "Application
+# startup failed" and the container never serves a request. Creating those
+# directories now and chowning the whole of /app, not just external/, fixes the
+# startup path and every later write into the workdir at once.
+RUN mkdir -p /app/external \
+             /app/data/recordings /app/data/processed /app/data/jobs \
+    && chown -R appuser:appuser /app
+
 COPY --chown=appuser:appuser src/__init__.py            ./src/
 COPY --chown=appuser:appuser src/core/__init__.py       ./src/core/
 COPY --chown=appuser:appuser src/core/console.py        ./src/core/
+# download_models.py imports this INSIDE download_speechbrain(), which is why it
+# is missing from a glance at the top-of-file imports. Without it the model step
+# dies with ModuleNotFoundError — after pip, and after three of the five models
+# have already downloaded.
+COPY --chown=appuser:appuser src/core/speechbrain_compat.py ./src/core/
 COPY --chown=appuser:appuser scripts/download_models.py ./scripts/
 
 USER appuser
@@ -159,7 +174,20 @@ ENV TEXT_ONLY_MODE=false \
     # instance size, and measure rather than assuming: more concurrent model
     # instances on few cores has already been observed to be SLOWER, not faster.
     OMP_NUM_THREADS=2 \
-    MKL_NUM_THREADS=2
+    MKL_NUM_THREADS=2 \
+    # The models are in the image, but from_pretrained() does not trust a
+    # populated cache on its own: without this it still issues a HEAD request
+    # per file to huggingface.co on every cold start. Under the CI check that
+    # runs with --network=none those fail instantly and fall back to the cache,
+    # so verification would exercise a path production never takes. In the
+    # cases that matter — an egress blackhole where the HEAD hangs against
+    # Cloud Run's 240 s startup probe, or an intercepting proxy whose SSLError
+    # is re-raised rather than cached around — it lands in the loader's
+    # swallow-everything except and serves "neutral" behind a green /health.
+    #
+    # It belongs HERE and not in the earlier ENV block: set before the download
+    # step, it would forbid the very fetches that populate the cache.
+    HF_HUB_OFFLINE=1
 
 EXPOSE 8000
 
