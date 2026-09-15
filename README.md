@@ -1,133 +1,244 @@
-# Humanoid Assistant V2
+# Emotion Detection System
 
 <div align="center">
   <img src="https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/Python_3.10-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10">
   <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" alt="PyTorch">
   <img src="https://img.shields.io/badge/Vanilla_JS-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black" alt="Vanilla JS">
 </div>
 
 <br/>
 
-**Humanoid Assistant V2** is a modular, real-time, multimodal emotion-analysis system. It captures user input and analyzes psychological states across three concurrent modalities: **Text**, **Voice**, and **Facial Expressions**. Using advanced deep learning models and a custom fusion engine, it provides a comprehensive emotional profile ready for integration with generative AI pipelines.
+Reads human emotion from text, voice, video and a live video call, and emits one
+stable JSON contract. This is the **input stage** of a three-part project:
 
----
-
-## ✨ Key Features
-
-- **Multimodal Emotion Fusion**: Intelligently combines textual semantics, vocal tone, and facial action units (AUs) to detect complex states like *masked anger* or *suppressed frustration*.
-- **Real-Time Streaming Architecture**: Built on WebSockets and `faster-whisper` VAD to process live audio and video feeds without blocking.
-- **Thread-Safe Session Isolation**: Safely handles concurrent requests from multiple clients with independent temporal emotion memory and state managers.
-- **Modern Web Interface**: A sleek, responsive Vanilla JS frontend that handles 16kHz PCM audio capturing and live WebSocket telemetry.
-- **State-of-the-Art ML Stack**:
-  - **Speech-to-Text (STT)**: OpenAI Whisper & `faster-whisper`.
-  - **Speech Emotion Recognition (SER)**: SpeechBrain (Wav2Vec2 IEMOCAP).
-  - **Text Emotion**: RoBERTa (`SamLowe/roberta-base-go_emotions`).
-  - **Facial Expression**: OpenFace 2.2.0 + Custom AU Classifier.
-
----
-
-## 🏗️ System Architecture
-
-```text
-humanoid-assistant-demo/
-├── api.py                          # FastAPI application entry point
-├── requirements.txt                # Python dependencies
-├── frontend/                       # Modern Web UI assets
-│   ├── index.html                  # Main UI layout
-│   ├── app.js                      # UI logic, audio capture, WebSocket
-│   └── index.css                   # Theming and styling
-├── routers/                        # Modular FastAPI endpoint routes
-│   ├── text.py                     # Text emotion API
-│   ├── voice.py                    # Voice emotion API
-│   ├── multimodal.py               # Multimodal analysis API
-│   └── stream.py                   # WebSocket streaming API
-├── schemas/                        # Pydantic data models
-│   └── emotion.py                  # Standardized JSON response schemas
-├── external/
-│   ├── openface/                   # OpenFace binary folder (Required)
-│   └── whisper/                    # Whisper model cache
-├── data/                           # Runtime data (WAVs, CSVs)
-└── src/                            # Core Analysis Logic
-    ├── faceexpression/             # OpenFace pipeline & AU classification
-    ├── ser/                        # SpeechBrain Wav2Vec2 SER engine
-    ├── stt/                        # Whisper speech-to-text
-    ├── text_emotion/               # RoBERTa text emotion
-    └── streaming/                  # Thread-safe session managers & pipelines
+```
+[ input module: this repo ] -> [ LLM brain ] -> [ avatar output ]
 ```
 
+**The server owns no camera and no microphone.** Everything is captured in the
+user's browser and uploaded. That is what allows many people to use one deployed
+instance at once — a server-side capture device would limit the whole system to
+one user on one machine.
+
 ---
 
-## ⚙️ Setup & Installation
+## The four modes
 
-### 1. Prerequisites
-- **Python 3.9+** (Tested on Windows).
-- **Git** (for cloning).
-- **Microphone and Webcam** (for multimodal and live-stream features).
+| Mode | Input | Models used | Endpoint |
+|---|---|---|---|
+| Text | Typed message | RoBERTa | `POST /analyze/text` |
+| Voice | Recorded or uploaded WAV | SpeechBrain + Whisper + RoBERTa | `POST /analyze/voice` |
+| Video | Recorded or uploaded file | MediaPipe + SpeechBrain + Whisper + RoBERTa | `POST /analyze/video` |
+| Live call | Real-time mic + camera | MediaPipe + SpeechBrain + faster-whisper + RoBERTa | `WS /ws/stream` |
 
-### 2. Environment Setup
-Clone the repository and activate a virtual environment:
+All four converge on one payload builder, so they cannot drift apart in what
+they emit.
+
+## Models
+
+| Purpose | Model | Identifier |
+|---|---|---|
+| Text emotion | RoBERTa go_emotions | `SamLowe/roberta-base-go_emotions` |
+| Speech emotion | SpeechBrain wav2vec2 | `speechbrain/emotion-recognition-wav2vec2-IEMOCAP` |
+| Speech to text (uploads) | OpenAI Whisper | `base` |
+| Speech to text (live) | faster-whisper | `tiny`, int8 |
+| Face expression | MediaPipe FaceLandmarker | `face_landmarker.task` |
+
+All run on CPU. None are fine-tuned; the current focus is architecture and
+consistency rather than model accuracy.
+
+---
+
+## Setup
+
+### Prerequisites
+
+- **Python 3.10**
+- **ffmpeg** on PATH — not optional. Audio and video decoding shell out to
+  `ffmpeg` and `ffprobe`.
+  - Windows: `winget install Gyan.FFmpeg`
+  - Debian/Ubuntu: `apt install ffmpeg`
+  - macOS: `brew install ffmpeg`
+
+No microphone or webcam is needed on the machine running the server.
+
+### Install
+
 ```bash
 git clone https://github.com/AhmadShazy/Emotion-Detection-System.git
 cd Emotion-Detection-System
 python -m venv .venv
-# Activate the virtual environment:
-# Windows: .venv\Scripts\activate
-# Linux/Mac: source .venv/bin/activate
+# Windows:      .venv\Scripts\activate
+# Linux/macOS:  source .venv/bin/activate
+
+pip install -r requirements.lock
 ```
 
-### 3. Install Dependencies
+Install `requirements.lock`, not `requirements.txt`. The lock pins the exact
+versions the test suite passes against; the unpinned file resolves differently
+on different days, and this system fails *silently* when that happens — see the
+header of `requirements.lock`.
+
+### Download the models
+
 ```bash
-pip install -r requirements.txt
+python scripts/download_models.py
 ```
 
-### 4. OpenFace Integration
-Facial expression analysis requires the OpenFace C++ binary.
-1. Download [OpenFace 2.2.0 (Windows x64)](https://github.com/TadasBaltrusaitis/OpenFace/releases).
-2. Extract it into the `external` directory so the executable is located exactly at:
-   `external/openface/OpenFace_2.2.0_win_x64/FeatureExtraction.exe`
+Roughly 1.7 GB, fetched once. The script exits non-zero if anything is missing,
+so a partial download cannot pass unnoticed.
 
-*(Note: Hugging Face models for Whisper, Wav2Vec2, and RoBERTa will download automatically on their first execution.)*
+### Configure
 
----
-
-## 🚀 Usage
-
-The system exposes a robust REST and WebSocket API via FastAPI, served alongside a modern web application.
-
-### Starting the Web Server
-
-Run the following command from the root of the project:
 ```bash
-uvicorn api:app --reload --host 0.0.0.0 --port 8000
+cp .env.example .env
 ```
 
-Once the server has started, open your web browser and navigate to:
-**[http://localhost:8000](http://localhost:8000)**
+Then set `API_KEYS` in `.env` to a key of your choosing:
 
-### Operational Modes (Web UI)
-- **💬 Text Analysis**: Paste or type text. Analyzes semantics instantly using RoBERTa.
-- **🎤 Voice Analysis**: Record your voice via the browser. Automatically transcribes text via Whisper and analyzes both vocal tone (Wav2Vec2) and textual emotion.
-- **🎬 Multimodal Session**: Records both your webcam (analyzed in the background via OpenFace) and microphone. Returns a fused temporal report.
-- **🌐 Live Stream**: Connects via WebSockets. Captures audio continuously, uses VAD to chunk sentences, and provides real-time multimodal feedback.
+```bash
+python -c "import secrets; print('hma_' + secrets.token_urlsafe(32))"
+```
 
-*(The legacy terminal menu (`main.py`) was removed — the FastAPI server is the only entry point. This README is being rewritten against the current codebase; treat the sections above with caution until then.)*
-
----
-
-## 🔌 API Reference (Brief)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/analyze/text` | Analyzes emotion from a raw string. |
-| `POST` | `/analyze/voice` | Analyzes a 16kHz PCM WAV audio file. |
-| `POST` | `/analyze/multimodal/start` | Initializes a background multimodal session. |
-| `POST` | `/analyze/multimodal/stop` | Terminates and processes the multimodal session. |
-| `WS` | `/ws/stream` | Establishes a live bidirectional analysis socket. |
-| `GET` | `/health` | Returns server health and API version. |
+**Every request needs that key, including from this machine.** There is no
+exemption for local callers — a bypass would mean the authentication path is the
+one path local testing never exercises.
 
 ---
 
-## 📝 License & Authors
-Developed by **Ahmad (Shezi)**. 
-Designed for research and demonstration purposes in Multimodal Human-Computer Interaction.
+## Run
+
+```bash
+uvicorn api:app --host 0.0.0.0 --port 8000
+```
+
+Open <http://localhost:8000> and enter your API key when the page asks.
+
+Startup takes 20–90 seconds while the five models load.
+
+---
+
+## API
+
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `POST` | `/analyze/text` | Emotion from a string | Key |
+| `POST` | `/analyze/voice` | WAV upload; normalised to 16 kHz mono | Key |
+| `POST` | `/analyze/video` | Video upload; frames plus audio | Key |
+| `WS` | `/ws/stream` | Live call; binary audio and video frames | Key |
+| `GET` | `/mock/scenarios` | Lists the frozen contract examples | Key |
+| `GET` | `/mock/payload/{name}` | One example payload; loads no models | Key |
+| `POST` | `/mock/emit/{name}` | Sends a chosen example to the LLM endpoint | Key |
+| `GET` | `/health` | Model status, for platform probes | Public |
+| `GET` | `/` | Browser front end | Public |
+
+The key goes in an `X-API-Key` header, or as `?api_key=` for the WebSocket,
+since browsers cannot set headers on a WebSocket handshake.
+
+**`/mock/*` exists so the LLM team can build against realistic payloads without
+running any models.** The examples are generated by the real fusion engine, so
+they cannot drift from what the API actually emits.
+
+---
+
+## Layout
+
+```text
+api.py                      FastAPI entry point, auth, health, static frontend
+requirements.lock           Pinned dependencies (install this one)
+Dockerfile                  Full-mode image with all five models baked in
+cloudbuild.yaml             Google Cloud Build pipeline
+.github/workflows/          GitHub Actions build, pushes to GHCR
+
+contract/
+  CONTRACT.md               The JSON contract the LLM stage consumes
+  payloads/                 Nine frozen examples, served by /mock
+
+frontend/                   Vanilla JS UI: capture, upload, WebSocket client
+  app.js                      all four modes, plus the live wire protocol
+  pcm-worklet.js              16 kHz PCM capture off the audio thread
+
+routers/                    One module per endpoint group
+schemas/emotion.py          Pydantic response models
+
+src/
+  core/                     Config, model registry, SpeechBrain compatibility
+  faceexpression/           MediaPipe blendshape analysis
+  ser/                      SpeechBrain speech emotion
+  text_emotion/             RoBERTa
+  video/ingest.py           ffmpeg wrapper: validation, frames, 16 kHz audio
+  streaming/                Turn detection, live sessions, fusion, contract
+
+scripts/
+  download_models.py        One-time model fetch
+  verify_image.sh           Proves a built image is self-contained
+  generate_contract_payloads.py
+  check_memory.py
+
+tests/                      86 tests; most need no models
+```
+
+---
+
+## Tests
+
+```bash
+pytest -q
+```
+
+86 tests. Most need no models and run in well under a second. Several enforce
+architecture rules rather than behaviour, so breaking one fails the build:
+
+- no module outside `config.py` may read environment variables
+- the speech-emotion reliability formula must exist in exactly one place
+- the silence threshold must be shared between the upload and live paths
+- the SpeechBrain compatibility patches must exist in exactly one place
+
+Those exist because duplication has already caused real failures here.
+
+---
+
+## Container
+
+The image carries all five models, so a cold start never depends on the network:
+
+```bash
+docker build -t emotion-detection .
+docker run -p 8000:8000 -e PORT=8000 -e API_KEYS=your-key emotion-detection
+```
+
+CI builds and pushes it, then verifies the result by running it with
+**no network access at all** and asserting every model loads
+(`scripts/verify_image.sh`). This matters because the system degrades silently:
+the model registry catches every loading exception and `/health` reports success
+regardless, so an instance missing a model starts cleanly, passes its health
+check, and returns `neutral` forever.
+
+### Deployment requirements
+
+| Requirement | Value | Why |
+|---|---|---|
+| Memory | 4 GB minimum | 1.54 GB resident; 2 GB tiers do not fit |
+| Architecture | `linux/amd64` | Current image is x86-64 |
+| HTTPS | Required | Browsers expose camera and microphone only in a secure context; over plain HTTP the voice, video and live-call modes do not work |
+| Instances | One | Session state and the call counter are per-process |
+| Request timeout | Raise from default | Platform timeouts apply to WebSockets and would cut a live call short |
+
+---
+
+## Further reading
+
+| Document | Contents |
+|---|---|
+| `contract/CONTRACT.md` | The JSON contract, field by field, with consumer guidance |
+| `docs/Technical-Reference.pdf` | Models, architecture and infrastructure, for sharing |
+| `BACKLOG.md` | Outstanding engineering work, ordered by priority |
+| `deploy/README.md` | Deployment runbook |
+
+---
+
+## Authors
+
+Developed by **Ahmad Shazy**. Final Year Project in multimodal
+human-computer interaction.

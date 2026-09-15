@@ -24,13 +24,8 @@ import numpy as np
 
 from src.streaming.turn_detector import TurnDetector, SAMPLE_RATE
 
-# How much audio a connection may hold. Sized to comfortably exceed the longest
-# permitted turn, so a normal caller never touches the limit.
-RING_SECONDS = 30
-RING_SAMPLES = RING_SECONDS * SAMPLE_RATE
-
 # Frames kept for the face reading. At the browser's ~3fps this is ~30s of
-# video, matching the audio ring.
+# video, which comfortably covers the longest permitted turn.
 MAX_VIDEO_FRAMES = 90
 
 # Above this, a frame is refused rather than buffered. A caller sending 4K
@@ -134,18 +129,6 @@ class CallSession:
         ]
 
         return frames
-
-    # ── Overflow ─────────────────────────────────────────────────────────────
-
-    def check_overflow(self) -> bool:
-        """
-        True when an in-progress turn has grown past what we will hold.
-
-        The caller should abandon the turn and tell the user. Splicing around a
-        gap would be worse: Whisper does not error on a discontinuity, it
-        transcribes the seam into a plausible-looking wrong sentence.
-        """
-        return self.detector.turn_samples >= RING_SAMPLES
 
     def stats(self) -> dict:
         return {

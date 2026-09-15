@@ -1050,12 +1050,15 @@ btnConnectStream.addEventListener('click', async () => {
                 startVideoSending(data.config && data.config.target_fps);
             }
 
+            // TURN_TOO_LONG used to be here. The server can never send it: the
+            // turn detector closes and resets a turn at 20 seconds, so the
+            // buffer check that raised it was unreachable and has been removed.
+            // A long speaker simply gets their turn analysed at the 20s mark.
             const messages = {
-                CONNECTED:     'Live - start speaking',
-                ANALYZING:     'Analysing your turn...',
-                BUSY:          'Skipped - still working on the previous turn',
-                TURN_TOO_LONG: 'That turn was too long - pause between thoughts',
-                TURN_FAILED:   'That turn could not be analysed',
+                CONNECTED:   'Live - start speaking',
+                ANALYZING:   'Analysing your turn...',
+                BUSY:        'Skipped - still working on the previous turn',
+                TURN_FAILED: 'That turn could not be analysed',
             };
             setStreamStatus(messages[data.code] || data.message || 'Connected');
             return;
