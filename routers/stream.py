@@ -214,21 +214,18 @@ else:
                     continue
 
                 # ── Audio ────────────────────────────────────────────────────
+                # A turn cannot outgrow the buffer, so there is no abandon path
+                # here. TurnDetector closes and resets at MAX_TURN_SECONDS (20s,
+                # 320k samples) while the buffer check it was compared against
+                # only tripped at 30s — so that check could never return True,
+                # and the TURN_TOO_LONG branch depending on it was unreachable
+                # code claiming a safety property the system did not have.
+                #
+                # What really happens at 20 seconds is better anyway: the
+                # detector emits the turn with reason "max_length" and it is
+                # analysed like any other, so a long speaker gets a reading
+                # rather than an error.
                 turn = session.push_audio(payload)
-
-                # A turn that outgrew the buffer is abandoned rather than
-                # spliced — a transcript stitched across a gap reads as a real
-                # sentence while being wrong.
-                if turn is None and session.check_overflow():
-                    session.detector.abandon_turn()
-                    session.turns_shed += 1
-                    await websocket.send_json({
-                        "type":    "status",
-                        "code":    "TURN_TOO_LONG",
-                        "message": "That went on too long to analyse — please pause between thoughts.",
-                    })
-                    continue
-
                 if turn is None:
                     continue
 
