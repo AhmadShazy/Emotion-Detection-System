@@ -31,17 +31,6 @@ class TextAnalysisRequest(BaseModel):
         }
 
 
-class MultimodalStartRequest(BaseModel):
-    pass
-
-
-class MultimodalStopRequest(BaseModel):
-    session_id: str = Field(
-        ...,
-        description="The session_id returned by /analyze/multimodal/start.",
-    )
-
-
 # ── NESTED SUB-MODELS ─────────────────────────────────────────────────────────
 
 class UserInput(BaseModel):
@@ -142,22 +131,13 @@ class UnifiedEmotionResponse(BaseModel):
         }
 
 
-VoiceAnalysisResponse = UnifiedEmotionResponse
-
-
-# ── MULTIMODAL SESSION MODELS ─────────────────────────────────────────────────
-
-class MultimodalSessionStarted(BaseModel):
-    session_id: str
-    status: str = Field(default="recording")
-    max_duration_seconds: int = Field(default=30)
-    message: str = Field(
-        default="Recording started. Call POST /analyze/multimodal/stop when done."
-    )
-
-
-# ── ERROR MODEL ───────────────────────────────────────────────────────────────
-
-class ErrorResponse(BaseModel):
-    detail: str
-    code: Optional[str] = Field(default=None)
+# Nothing below this point. VoiceAnalysisResponse, MultimodalSessionStarted,
+# MultimodalStartRequest, MultimodalStopRequest and ErrorResponse used to live
+# here and were removed: all five had zero references anywhere in the codebase.
+# They described the /analyze/multimodal/start and /stop endpoints, which no
+# longer exist — multimodal analysis became the /analyze/video upload and the
+# /ws/stream live call during Phases 3 and 4.
+#
+# If error responses ever need a typed shape with a machine-readable code, add
+# it back then. Keeping an unused model against a maybe is how a schema file
+# stops describing the API it is supposed to document.

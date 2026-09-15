@@ -1,140 +1,128 @@
 # Deploying the input module
 
-The goal here is narrow and worth stating plainly: **get a URL your LLM
-teammate can call.** That is all this deployment does.
+The goal is narrow and worth stating plainly: **get a URL your LLM teammate can
+call**, running the full system — text, voice, video and the live call.
 
-It runs in **text-only mode** — `/analyze/text` plus the `/mock/*` contract
-sandbox. Voice, multimodal and live-stream are *not* deployable yet: they
-currently require the server to own a microphone and a webcam, and a
-Windows-only OpenFace binary. Fixing that is Phases 3 and 4.
+The container image carries all five models, so a cold start never depends on
+the network. CI builds it, pushes it, and verifies it by running it with no
+network access at all.
 
 ---
 
-## What you get
+## 1. Get the image
 
-| Endpoint | Needs models? | Purpose |
+Two pipelines exist. Either produces a deployable image; only the repository
+leaves your machine.
+
+| Pipeline | Pushes to | Trigger |
 |---|---|---|
-| `GET /health` | no | Liveness + which mode is running |
-| `GET /mock/scenarios` | no | All 9 example payloads with descriptions |
-| `GET /mock/payload/{name}` | no | One payload, real shape |
-| `POST /mock/emit/{name}` | no | Push a payload to `LLM_ENDPOINT_URL` |
-| `POST /analyze/text` | RoBERTa | Real analysis of real text |
-| `GET /docs` | no | Interactive API documentation |
+| `.github/workflows/build-image.yml` | `ghcr.io/<owner>/<repo>` | Push to `main` or `dev`, or run by hand from the Actions tab |
+| `cloudbuild.yaml` | Artifact Registry | `gcloud builds submit --config cloudbuild.yaml` |
 
-Your teammate can build her entire integration against `/mock/*` before you
-ever get the full pipeline hosted.
+**Do not build this locally unless you have a fast connection.** The image is
+about 5 GB. Measured on the development machine, package downloads ran at
+9–76 kB/s: roughly 8 hours to build, and closer to 18 to push, with no way to
+resume a push from a cache. A CI runner does it in 11–12 minutes.
+
+### If the GHCR package is private
+
+It inherits the repository's visibility. Either make the package public
+(**Repo → Packages → Package settings → Change visibility**) or give the host a
+pull credential: a GitHub token with `read:packages` only.
 
 ---
 
-## Option A — Hugging Face Spaces (recommended, free)
+## 2. What the host must provide
 
-Best fit here: it is built for ML models, the free tier has enough RAM, and
-model weights cache properly. Downside: free Spaces are publicly discoverable,
-so the API key is doing real work — which is why we rotated it.
+These are requirements, not preferences. Each one has already bitten or would.
 
-**1. Create the Space**
+| Requirement | Value | Why |
+|---|---|---|
+| **Memory** | 4 GB minimum | Measured resident set is 1.54 GB with every model loaded. 2 GB tiers do not fit. |
+| **Architecture** | `linux/amd64` | The image CI builds is x86-64. ARM hosts (Oracle Ampere, Graviton) need a separate ARM build and every pinned wheel re-verified for `aarch64`. |
+| **HTTPS** | Required | Browsers expose the camera and microphone only in a secure context. Over plain `http://<ip>`, `navigator.mediaDevices` is undefined and **voice, video and the live call all stop working** — only text and file upload survive. A bare IP with no certificate is not a viable deployment. |
+| **Instances** | Exactly one | Session state (`unified_pipeline`) and the live-call counter (`routers/stream.py`) are both per-process. A second instance treats a known `session_id` as brand new. |
+| **Request timeout** | Raise from the default | Platforms apply their HTTP request timeout to WebSockets too. Cloud Run's default 300 s severs a live call mid-conversation at five minutes. |
+| **Concurrency** | 4 or fewer | The app implements no admission control of its own beyond the live-call cap. |
 
-At <https://huggingface.co/new-space>: pick a name, choose **Docker** → **Blank**,
-and set visibility. Public is fine — the API key protects the endpoints.
+---
 
-**2. Add the Space config**
+## 3. Deploy
 
-Hugging Face reads its settings from YAML at the top of `README.md` *in the
-Space repo*. Copy `deploy/huggingface-README.md` from this repo to `README.md`
-in the Space.
-
-**3. Set the secret**
-
-In the Space: **Settings → Variables and secrets → New secret**
-
-| Name | Value |
-|---|---|
-| `API_KEYS` | your key from `.env` (`cat .env` to read it) |
-
-Add `LLM_ENDPOINT_URL` too once your teammate's endpoint exists.
-
-> Use **Secret**, not **Variable**. Variables are visible in the UI.
-
-**4. Push**
+### Google Cloud Run
 
 ```bash
-git remote add space https://huggingface.co/spaces/<user>/<space-name>
-git push space rebuild/phase-0-foundation:main
+gcloud run deploy emotion-detection \
+  --image=us-central1-docker.pkg.dev/YOUR_PROJECT/humanoid/humanoid-input:latest \
+  --region=us-central1 \
+  --memory=4Gi \
+  --cpu=2 \
+  --timeout=3600 \
+  --max-instances=1 \
+  --concurrency=4 \
+  --set-secrets=API_KEYS=humanoid-api-keys:latest \
+  --allow-unauthenticated
 ```
 
-First build takes 5–10 minutes, mostly downloading torch.
+`--allow-unauthenticated` is correct here: the app serves its own frontend, and
+the API key gates `/analyze/*` and `/ws/stream`. Cloud Run's own IAM would block
+the browser before it could present a key. HTTPS and a valid certificate come
+free, which settles the secure-context requirement.
 
-**5. Verify**
+### Anything else
 
-```bash
-curl https://<user>-<space>.hf.space/health
-curl -H "X-API-Key: YOUR_KEY" https://<user>-<space>.hf.space/mock/scenarios
-```
-
-`/health` should return `"mode": "text_only"`. If `/mock/scenarios` returns
-403, the secret name is wrong or wasn't saved.
-
----
-
-## Option B — Railway / Render / Fly.io
-
-Any container host works — the `Dockerfile` is portable and reads `$PORT`.
-
-1. Point the platform at this repo, branch `rebuild/phase-0-foundation`.
-2. It will detect the `Dockerfile` automatically.
-3. Set `API_KEYS` as an environment variable / secret.
-4. Deploy.
-
-⚠️ **Render's free tier is 512 MB RAM**, which is not enough for PyTorch plus
-RoBERTa. You need a paid instance there. Railway and Fly are usage-based and
-generally fine.
+Railway, Fly.io and similar work the same way: point the host at the image, give
+it 4 GB, set `API_KEYS` as a secret, raise the request timeout, and make sure the
+URL is HTTPS.
 
 ---
 
-## Option C — Mock-only micro-deployment
+## 4. Configure
 
-If all you need *right now* is unblocking your teammate, note that
-`routers/mock.py` loads **no models at all**. A deployment serving only
-`/mock/*` needs no PyTorch and no RoBERTa — it fits any free tier trivially and
-starts in seconds.
+| Variable | Set it to | Notes |
+|---|---|---|
+| `API_KEYS` | Your key, as a **platform secret** | Leaving it unset **disables authentication entirely**. Startup prints a loud banner when that happens. |
+| `PORT` | Whatever the platform injects | Defaults to 8000 |
+| `LLM_ENDPOINT_URL` | Your teammate's receiver | Optional; fire-and-forget |
+| `TEXT_ONLY_MODE` | Leave unset | The image defaults it to `false` for full mode |
 
-Not wired up as a separate build today, but worth remembering if hosting turns
-out to be slow or expensive.
+There is deliberately **no setting that skips authentication for local
+requests**. A bypass keyed on where the caller connected from would mean the
+auth path is the one path local testing never exercises — which is how
+`/ws/stream` once shipped with no authentication at all.
 
 ---
 
-## Before you deploy
+## 5. Verify after deploying
 
-- [ ] `API_KEYS` set as a **secret** on the platform, never committed —
-      leaving it unset disables authentication entirely
-- [ ] `TEXT_ONLY_MODE` left at `true` (the image already defaults it)
-- [ ] Teammate has the key, sent over something private — not the repo, not a
-      public channel
-
-## After you deploy
-
-- [ ] `/health` returns `"mode": "text_only"`
-- [ ] `/mock/scenarios` returns 9 scenarios **with** the key
-- [ ] `/mock/scenarios` returns **403** without it — if it returns 200, the key
-      was not picked up and the API is open
+- [ ] `/health` returns `"mode": "full"` and every model `"available": true`
+- [ ] `/analyze/text` returns **403** without a key — if it returns 200, the key
+      was not picked up and the API is open to anyone
+- [ ] `/analyze/text` returns a payload **with** the key
+- [ ] The URL is `https://`, and the live call can access the camera in a browser
 - [ ] Send your teammate the URL and `contract/CONTRACT.md`
 
 ---
 
 ## Notes
 
-**Image size** is around 2–3 GB, dominated by PyTorch. That is normal for an ML
-container and why the CPU-only torch index matters — the CUDA build would add
-roughly another 2 GB for no benefit.
+**Why models are baked in.** This system degrades *silently*: the model registry
+catches every loading exception and `/health` reports success regardless. An
+instance missing a model does not crash — it starts cleanly, passes its health
+check, and answers `neutral` forever. Downloading at boot makes that outcome
+depend on network conditions, and Hugging Face has already returned HTTP 429
+during a startup here. `scripts/verify_image.sh` is what stops a half-populated
+image reaching a registry.
 
-**Cold starts.** RoBERTa is baked into the image at build time, so a restart
-does not re-download it. Expect roughly 10–20 seconds to first response.
+**Cold starts.** Models load from local disk, not the network: expect 20–90
+seconds to first response. On a scale-to-zero platform that cost is paid on the
+first request after idling, so consider a minimum instance if a demo must feel
+instant.
 
-**Trimming dependencies.** `requirements-text.txt` was derived by testing, not
-guessing. Removing anything from it makes RoBERTa fail to load — and the failure
-is *silent*: the server still starts, `/health` still returns 200, and every
-analysis comes back `neutral`. Re-test if you change it.
+**Image size** is around 5 GB, dominated by PyTorch and the models. The CPU-only
+torch index matters: the CUDA build would add several GB for no benefit on a
+host with no GPU.
 
-**Old key in git history.** The previously-committed key still exists in earlier
-commits. That is harmless now that it has been rotated, since the old value no
-longer opens anything. Do not put the new one anywhere tracked.
+**Old key in git history.** A previously-committed key still exists in earlier
+commits. That is harmless now it has been rotated, since the old value no longer
+opens anything. Do not put the new one anywhere tracked.
