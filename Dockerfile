@@ -161,8 +161,7 @@ COPY --chown=appuser:appuser frontend/ ./frontend/
 COPY --chown=appuser:appuser contract/ ./contract/
 
 # ── Runtime configuration ────────────────────────────────────────────────────
-ENV TEXT_ONLY_MODE=false \
-    PORT=8000 \
+ENV PORT=8000 \
     # Thread counts are pinned because PyTorch and OpenMP size their pools from
     # the CPUs VISIBLE IN THE CONTAINER, and a 1-2 vCPU allocation on a shared
     # host commonly still reports the host's full core count. Unpinned, three

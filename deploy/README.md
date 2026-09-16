@@ -110,7 +110,6 @@ URL is HTTPS.
 | `API_KEYS` | Your key, as a **platform secret** | Leaving it unset **disables authentication entirely**. Startup prints a loud banner when that happens. |
 | `PORT` | Whatever the platform injects | Defaults to 8000 |
 | `LLM_ENDPOINT_URL` | Your teammate's receiver | Optional; fire-and-forget |
-| `TEXT_ONLY_MODE` | Leave unset | The image defaults it to `false` for full mode |
 
 There is deliberately **no setting that skips authentication for local
 requests**. A bypass keyed on where the caller connected from would mean the

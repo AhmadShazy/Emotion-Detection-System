@@ -3,8 +3,8 @@ src/core/model_registry.py
 ===========================
 Central singleton registry that owns all ML model instances.
 
-TEXT_ONLY_MODE=true  → loads only RoBERTa (~350MB RAM)
-TEXT_ONLY_MODE=false → loads all 4 models (~1.4GB RAM)
+Loads all four models at startup (~1.4 GB resident). They are shared read-only
+across every request, so nothing reloads per call.
 """
 
 import os
@@ -20,9 +20,6 @@ PROJECT_ROOT = os.path.dirname(
 WHISPER_CACHE        = os.path.join(PROJECT_ROOT, "external", "whisper")
 FASTER_WHISPER_CACHE = os.path.join(PROJECT_ROOT, "external", "faster_whisper")
 SPEECHBRAIN_CACHE    = os.path.join(PROJECT_ROOT, "external", "speechbrain")
-
-# ── Read mode flag ─────────────────────────────────────────────────────────────
-from src.core.config import TEXT_ONLY_MODE
 
 
 class ModelRegistry:
@@ -40,24 +37,15 @@ class ModelRegistry:
                 return
 
             print("\n[Registry] ══════════════════════════════════════")
-            if TEXT_ONLY_MODE:
-                print("[Registry] TEXT_ONLY_MODE=true — loading RoBERTa only")
-            else:
-                print("[Registry] Loading all models into memory...")
+            print("[Registry] Loading all models into memory...")
             print("[Registry] ══════════════════════════════════════")
 
-            # ── Build loader list based on mode ───────────────────────────────
-            if TEXT_ONLY_MODE:
-                loaders = [
-                    ("roberta", self._load_roberta),
-                ]
-            else:
-                loaders = [
-                    ("roberta",        self._load_roberta),
-                    ("faster_whisper", self._load_faster_whisper),
-                    ("whisper",        self._load_whisper),
-                    ("speechbrain",    self._load_speechbrain),
-                ]
+            loaders = [
+                ("roberta",        self._load_roberta),
+                ("faster_whisper", self._load_faster_whisper),
+                ("whisper",        self._load_whisper),
+                ("speechbrain",    self._load_speechbrain),
+            ]
 
             failed = []
             for name, fn in loaders:
@@ -94,7 +82,6 @@ class ModelRegistry:
     def status(self) -> dict:
         return {
             "loaded":      self._loaded,
-            "mode":        "text_only" if TEXT_ONLY_MODE else "full",
             "models": {
                 name: {
                     "available":         name in self._models,
