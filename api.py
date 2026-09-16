@@ -3,8 +3,7 @@ api.py — FastAPI Entry Point
 ============================
 Humanoid Assistant V2 API
 
-TEXT_ONLY_MODE=true  → only /analyze/text + /health exposed
-TEXT_ONLY_MODE=false → all endpoints exposed
+Serves every analysis mode: text, voice, video upload and the live call.
 
 Frontend static files (UI) are always public — no key needed.
 API endpoints require a key, on every machine including this one: callers send
@@ -31,12 +30,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
-from routers import text, mock
-from src.core.config import TEXT_ONLY_MODE, API_KEYS
-
-# ── Conditionally import disabled routers ─────────────────────────────────────
-if not TEXT_ONLY_MODE:
-    from routers import voice, video, stream
+from routers import text, mock, voice, video, stream
+from src.core.config import API_KEYS
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -92,9 +87,10 @@ class APIKeyMiddleware:
 
     def _is_authorised(self, scope) -> bool:
         # An empty key set turns authentication off outright. That is a real
-        # configuration — a text-only demo, or a checkout with no .env — rather
-        # than a hidden special case, and the lifespan handler shouts about it
-        # at startup so it can never be the accidental state in a deployment.
+        # configuration — a throwaway local demo, or a checkout with no .env —
+        # rather than a hidden special case, and the lifespan handler shouts
+        # about it at startup so it can never be the accidental state in a
+        # deployment.
         if not API_KEYS:
             return True
         return _extract_key(scope) in API_KEYS
@@ -148,7 +144,6 @@ class APIKeyMiddleware:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("\n[STARTUP] Humanoid Assistant API initialising...")
-    print(f"[STARTUP] Mode: {'TEXT ONLY' if TEXT_ONLY_MODE else 'FULL'}")
     print(f"[STARTUP] API Keys loaded: {len(API_KEYS)}")
 
     # config.py promises this warning exists so an unauthenticated deployment
@@ -166,12 +161,11 @@ async def lifespan(app: FastAPI):
     # Clear any working directories orphaned by a previous process that was
     # killed mid-request. Each request cleans up after itself in a finally
     # block, but that cannot survive a SIGKILL, an OOM kill or a reboot.
-    if not TEXT_ONLY_MODE:
-        from routers.video import sweep_stale_jobs
-        swept = sweep_stale_jobs()
-        if swept:
-            print(f"[STARTUP] Removed {swept} stale job director"
-                  f"{'y' if swept == 1 else 'ies'} from a previous run.")
+    from routers.video import sweep_stale_jobs
+    swept = sweep_stale_jobs()
+    if swept:
+        print(f"[STARTUP] Removed {swept} stale job director"
+              f"{'y' if swept == 1 else 'ies'} from a previous run.")
 
     from src.core.model_registry import registry
     await asyncio.to_thread(registry.load_all)
@@ -207,14 +201,13 @@ app.add_middleware(
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(text.router, prefix="/analyze", tags=["Text Analysis"])
 
-# Contract sandbox for the LLM team. Registered in BOTH modes and loads no
-# models, so it stays available on a small text-only deployment.
+# Contract sandbox for the LLM team. Loads no models, so it answers instantly
+# and stays usable even while the registry is still warming up.
 app.include_router(mock.router, prefix="/mock", tags=["Contract Sandbox"])
 
-if not TEXT_ONLY_MODE:
-    app.include_router(voice.router,      prefix="/analyze", tags=["Voice Analysis"])
-    app.include_router(video.router,      prefix="/analyze", tags=["Video Analysis"])
-    app.include_router(stream.router,     tags=["Live Stream"])
+app.include_router(voice.router,  prefix="/analyze", tags=["Voice Analysis"])
+app.include_router(video.router,  prefix="/analyze", tags=["Video Analysis"])
+app.include_router(stream.router, tags=["Live Stream"])
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health", tags=["System"], summary="Health Check")
@@ -223,7 +216,6 @@ async def health():
     return JSONResponse({
         "status":      "ok",
         "api_version": "2.0.0",
-        "mode":        "text_only" if TEXT_ONLY_MODE else "full",
         "models":      registry.status(),
     })
 

@@ -84,54 +84,15 @@ if (SESSION_API_KEY) {
 }
 
 // ============================================================================
-// Mode Detection — called on startup
+// Session state
 // ============================================================================
+// There used to be mode detection here: the page asked /health which mode the
+// server was in and greyed out the tabs the server could not serve, because a
+// reduced text-only deployment existed. That deployment is gone and every mode
+// is always available, so the tabs no longer need gating — and the page no
+// longer has to guess what it is talking to.
 let currentTab       = 'text';
 let currentSessionId = null;
-let availableMode    = 'text_only';
-
-async function detectServerMode() {
-    try {
-        const res  = await fetch(`${API_BASE}/health`);
-        const data = await res.json();
-        availableMode = data.mode || 'text_only';
-    } catch (e) {
-        console.warn('[Mode] Could not reach /health — defaulting to text_only');
-        availableMode = 'text_only';
-    }
-    applyModeToUI();
-}
-
-function applyModeToUI() {
-    const modeMap = {
-        'text_only': ['text'],
-        'full':      ['text', 'voice', 'multimodal', 'stream'],
-    };
-    const enabledTabs = modeMap[availableMode] || ['text'];
-
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        const tab = btn.getAttribute('data-tab');
-        if (!enabledTabs.includes(tab)) {
-            btn.classList.add('tab-disabled');
-            btn.setAttribute('disabled', true);
-            btn.setAttribute('title', 'Coming Soon');
-            if (!btn.querySelector('.coming-soon-badge')) {
-                const badge = document.createElement('span');
-                badge.className = 'coming-soon-badge';
-                badge.textContent = 'Soon';
-                btn.appendChild(badge);
-            }
-        } else {
-            btn.classList.remove('tab-disabled');
-            btn.removeAttribute('disabled');
-            btn.removeAttribute('title');
-        }
-    });
-
-    if (!enabledTabs.includes(currentTab)) {
-        switchTab('text');
-    }
-}
 
 function switchTab(tabName) {
     if (ws) disconnectWebSocket();
@@ -1088,4 +1049,3 @@ btnDisconnectStream.addEventListener('click', disconnectWebSocket);
 // Init
 // ============================================================================
 initTheme();
-detectServerMode();

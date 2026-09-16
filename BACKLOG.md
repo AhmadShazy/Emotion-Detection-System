@@ -40,67 +40,32 @@ Effort estimates are for someone who already knows the codebase.
       raised, since nothing reads the peer address any more.
 - [x] **Two concurrent uploads could splice each other's transcripts** through
       the shared openai-whisper decoder, silently. Fixed in `17c0369`.
+- [x] **The image now builds and runs full mode.** ffmpeg, the OpenCV and
+      PortAudio system libraries, all five models baked in, CPU-only torch.
+      Built by GitHub Actions and verified in CI with `--network=none`, so a
+      half-populated image cannot reach a registry. Measured RAM floor:
+      **1.54 GB idle**, which is why 4 GB is the deploy setting.
+- [x] **TEXT_ONLY_MODE removed entirely.** The reduced mode existed for a free
+      tier that could not host the full stack; once that plan was dropped it
+      was a second code path nothing exercised — half the routes had a
+      disabled twin, the registry had two loading strategies, and the
+      frontend asked `/health` which one it was talking to. A test now guards
+      its absence.
+- [x] **Dependencies pinned.** `requirements.lock` holds 94 packages frozen
+      from the environment the tests pass in, and the Dockerfile installs it
+      rather than the unpinned list. The SpeechBrain compatibility patches
+      turned out to be duplicated in **four** places, two of them incomplete —
+      and the incomplete copies were the ones a container build depended on,
+      so the downloader failed on speechbrain 1.1.0 while the running server
+      loaded the same model fine. One definition now, with a test guarding it.
+- [x] **`requirements-text.txt` deleted** along with TEXT_ONLY_MODE. It
+      described a minimal install for a deployment that no longer exists.
 
 ---
 
 ## Before deploying
 
-### 1. Build an image that actually runs full mode
-`Dockerfile`, `.dockerignore` · **half a day to a day** · *the big one*
-
-The Dockerfile installs `requirements-text.txt`, has **no `apt-get` line at
-all**, hardcodes `TEXT_ONLY_MODE=true`, and `.dockerignore` excludes
-`external/` where every model lives. Its header still cites the mic/webcam/
-OpenFace constraint that Phases 3–4 removed.
-
-Flipping `TEXT_ONLY_MODE=false` on the current image does **not** crash — it
-starts cleanly, reports healthy, and returns `neutral` for every voice and video
-turn, because `interactive_modes.py` swallows the ImportError and
-`routers/video.py` imports MediaPipe lazily. Silent degradation is worse than a
-crashloop.
-
-Needs:
-- `RUN apt-get install -y --no-install-recommends ffmpeg` — `src/video/ingest.py`
-  shells out to `ffprobe` and `ffmpeg`.
-- The real `requirements.txt`, minus `sounddevice` (needs PortAudio; no request
-  path uses it).
-- **Every model baked in**, not just RoBERTa. `external/speechbrain` contains
-  five zero-byte symlinks into the HuggingFace cache, so `external/` and the HF
-  cache must be copied in the *same layer* or the links dangle. Do it with
-  `RUN python scripts/download_models.py` and `HF_HOME` set inside the image.
-- Verify with `docker run --network=none` that nothing downloads at boot.
-
-Measured RAM floor: **1.54 GB idle** (RoBERTa 341 MB, Whisper base 431,
-SpeechBrain 633, faster-whisper 61, MediaPipe 94). A 2 GB tier is not viable;
-4 GB works only with models baked in; 8 GB is comfortable. Expect a 4–6 GB
-image — the right trade against Cloud Run's 240 s startup probe.
-
-### 2. Pin the dependencies
-`requirements.txt`, `requirements-text.txt` · **1 hour** · *do this before #1*
-
-`grep -c '=='` returns **0** for both files. Every load-bearing dependency
-floats. The two interpreters on the dev machine already disagree across three
-major-version boundaries — transformers 4.57 vs 5.8, speechbrain 1.0.3 vs 1.1.0,
-torch 2.9 vs 2.11, starlette 0.27 vs 1.0.
-
-The SpeechBrain compatibility patches in `src/ser/ser_engine.py` are documented
-as "for SpeechBrain 1.0.3", monkeypatch a **private** API, and one exists
-specifically because "transformers removed `AutoModelWithLMHead` in v5" — while
-the `.venv` already runs transformers 5.8. That patch block is duplicated in
-**three** places (`model_registry.py`, `ser_engine.py`,
-`scripts/download_models.py`).
-
-An unpinned resolver inside `docker build` produces different library code than
-what was tested, and combined with `/health` always reporting ok (#3) that is
-the silent-neutral-forever failure again. Baking models in does not help,
-because the code that *loads* them changed. "84 tests pass" is currently true of
-only one of the two environments.
-
-Fix: `pip freeze` the working environment into `requirements.lock`, install that
-in the Dockerfile, collapse the three patch copies into one module, add it to
-the existing single-definition test in `tests/test_contract.py`.
-
-### 3. Make `/health` tell the truth
+### 1. Make `/health` tell the truth
 `api.py`, `src/core/model_registry.py` · **30 min**
 
 `load_all` catches every loader exception, appends to a local `failed` list that
@@ -118,7 +83,7 @@ Add `active_calls` to the response while in there.
 room, and `conflict_analysis` can never fire. `README.md` still tells you to
 download OpenFace and never mentions `scripts/download_models.py`.
 
-### 4. Pin the PyTorch thread count
+### 2. Pin the PyTorch thread count
 `src/core/model_registry.py`, `Dockerfile` · **15 min + re-measure**
 
 No `set_num_threads`, no `OMP_NUM_THREADS`, no `MKL_NUM_THREADS` anywhere.
@@ -132,7 +97,7 @@ Pin alongside `INFERENCE_WORKERS`, set both env vars in the Dockerfile, then
 **re-measure**. Do not assume this explains the earlier "more workers = slower"
 result; that link is unverified.
 
-### 5. Harden `/analyze/voice`
+### 3. Harden `/analyze/voice`
 `routers/voice.py` · **30 min**
 
 The least defended route, and `/analyze/video` already does all three correctly.
@@ -147,7 +112,7 @@ The least defended route, and `/analyze/video` already does all three correctly.
 - **Corrupt uploads report 500** — `VideoIngestError` falls through to the
   generic handler; video maps the identical exception to 400.
 
-### 6. The live-call slot leak
+### 4. The live-call slot leak
 `routers/stream.py:107` vs `162` · **5 min**
 
 `_active_calls += 1` happens at line 107; the `try` whose `finally` holds the
@@ -156,7 +121,7 @@ returns the slot. The counter is monotonic — no decay, no timeout, no
 reconciliation — and on Render or Railway the process lives for days. The window
 is only one client round-trip wide, but the counter never heals.
 
-### 7. Decide and write down the deployment configuration
+### 5. Decide and write down the deployment configuration
 `deploy/README.md`, `Dockerfile`, platform flags · **1 hour, no code**
 
 The runbook currently says voice, multimodal and live-stream "are not deployable
@@ -177,7 +142,7 @@ previous architecture.
   remaining way to run without authentication, and startup prints a loud banner
   when that happens.
 
-### 8. Decide the push-delivery story
+### 6. Decide the push-delivery story
 `contract/CONTRACT.md`, `routers/text.py` · **15 min to document, 2 h to build**
 
 `LLM_ENDPOINT_URL` appears in `config.py`, `routers/text.py` and

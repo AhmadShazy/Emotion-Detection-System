@@ -214,11 +214,9 @@ def test_websocket_accepts_and_reports_config():
     the handshake fails before reaching the app.
     """
     from fastapi.testclient import TestClient
-    from src.core.config import API_KEYS, TEXT_ONLY_MODE
+    from src.core.config import API_KEYS
     import api
 
-    if TEXT_ONLY_MODE:
-        pytest.skip("live stream is disabled in text-only mode")
 
     key = next(iter(API_KEYS)) if API_KEYS else ""
 
@@ -304,11 +302,9 @@ def test_completed_turn_is_delivered_over_the_socket():
     import glob
     import soundfile as sf
     from fastapi.testclient import TestClient
-    from src.core.config import API_KEYS, TEXT_ONLY_MODE
+    from src.core.config import API_KEYS
     import api
 
-    if TEXT_ONLY_MODE:
-        pytest.skip("live stream is disabled in text-only mode")
 
     # A recording with real, audible speech.
     candidates = sorted(glob.glob("data/recordings/voice_analysis_*.wav"))
