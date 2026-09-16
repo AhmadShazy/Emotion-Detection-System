@@ -40,10 +40,17 @@ substitutions:
   _TAG: manual
 
 options:
-  # The default machine has too little disk and CPU for a 5 GB image with a
-  # 1.7 GB model download. This costs more per minute and far less in total,
-  # because the build is not sitting waiting on itself.
-  machineType: E2_HIGHCPU_8
+  # machineType is deliberately NOT set, which means the default e2-medium.
+  #
+  # Cloud Build's free allowance — 120 build-minutes per day — applies ONLY to
+  # the default machine. Every larger type, E2_HIGHCPU_8 included, is billed per
+  # minute from the first minute, free allowance or not. This file used to
+  # request E2_HIGHCPU_8 for speed, chosen while the goal was fast iteration.
+  # The goal is now zero cost, and a slower free build beats a faster paid one
+  # for a project that rebuilds occasionally.
+  #
+  # If a build ever needs to be fast more than it needs to be free, put
+  # `machineType: E2_HIGHCPU_8` back for that run and expect a charge.
   diskSizeGb: 100
   logging: CLOUD_LOGGING_ONLY
 
