@@ -5,7 +5,7 @@ Two layers, set up once, so a student account cannot quietly accumulate cost:
 | Layer | Threshold | What it does |
 |---|---|---|
 | **Warning budget** | $1 and $2 | Emails you. Changes nothing. |
-| **Kill switch** | $9 | Disables billing on the project. Everything stops. |
+| **Kill switch** | $6 | Disables billing on the project. Everything stops. |
 
 Expected steady-state spend for this project is around **$0.50/month** (Artifact
 Registry storage for the ~5 GB image). Cloud Run should stay inside the Always
@@ -54,13 +54,17 @@ linked to one yet, and nothing below will work.
 ```bash
 gcloud services enable \
   cloudbilling.googleapis.com \
-  cloudbudgets.googleapis.com \
   cloudfunctions.googleapis.com \
   pubsub.googleapis.com \
   cloudbuild.googleapis.com \
   run.googleapis.com \
   artifactregistry.googleapis.com
 ```
+
+`cloudbudgets.googleapis.com` is not a real, separately-enablable service --
+`gcloud services enable` rejects it with `SERVICE_CONFIG_NOT_FOUND_OR_PERMISSION_DENIED`.
+Budget creation in Step 6 rides on `cloudbilling.googleapis.com`, which is
+already in the list above.
 
 ## 3. Create the Pub/Sub topic the budget publishes to
 
@@ -80,7 +84,7 @@ gcloud functions deploy billing-guard \
   --source=deploy/billing-guard \
   --entry-point=handle_budget_notification \
   --trigger-topic=billing-alerts \
-  --set-env-vars=KILL_AMOUNT=9,DRY_RUN=true \
+  --set-env-vars=KILL_AMOUNT=6,DRY_RUN=true \
   --memory=256Mi
 ```
 
@@ -90,19 +94,29 @@ reason correctly.
 
 ## 5. Grant it permission to disable billing
 
-This is the step people miss. The permission is on the **billing account**, not
-the project, and without it the function fails with 403 at exactly the moment
-it matters.
+This is the step people miss, and it needs **two** bindings on **two different
+resources** -- one on the billing account, one on the project. Neither alone is
+enough, and `gcloud` rejects `roles/billing.projectManager` if you try to bind
+it at the billing-account scope, since it is a project-level role.
 
 ```bash
 SA=$(gcloud functions describe billing-guard --gen2 --region=us-central1 \
   --format="value(serviceConfig.serviceAccountEmail)")
 echo "service account: $SA"
 
+# Billing-account-level role: lets the SA unlink projects from this billing account
 gcloud billing accounts add-iam-policy-binding "$BILLING_ACCOUNT" \
+  --member="serviceAccount:$SA" \
+  --role="roles/billing.user"
+
+# Project-level role: lets the SA actually change this project's billing link
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:$SA" \
   --role="roles/billing.projectManager"
 ```
+
+Without both, the disable call fails with 403 at exactly the moment it
+matters.
 
 ## 6. Create both budgets
 
@@ -119,13 +133,13 @@ gcloud billing budgets create \
 
 Thresholds at 50% and 100% of $2 give you alerts at **$1 and $2**.
 
-**Kill budget — $9, wired to the function:**
+**Kill budget — $6, wired to the function:**
 
 ```bash
 gcloud billing budgets create \
   --billing-account="$BILLING_ACCOUNT" \
-  --display-name="kill-9usd" \
-  --budget-amount=9USD \
+  --display-name="kill-6usd" \
+  --budget-amount=6USD \
   --threshold-rule=percent=100 \
   --all-updates-rule-pubsub-topic="projects/$PROJECT_ID/topics/billing-alerts"
 ```
@@ -142,9 +156,9 @@ Publish a fake notification claiming $10 of spend:
 
 ```bash
 gcloud pubsub topics publish billing-alerts --message='{
-  "budgetDisplayName": "kill-9usd",
+  "budgetDisplayName": "kill-6usd",
   "costAmount": 10.0,
-  "budgetAmount": 9.0,
+  "budgetAmount": 6.0,
   "currencyCode": "USD"
 }'
 
@@ -167,7 +181,7 @@ gcloud functions deploy billing-guard \
   --source=deploy/billing-guard \
   --entry-point=handle_budget_notification \
   --trigger-topic=billing-alerts \
-  --set-env-vars=KILL_AMOUNT=9,DRY_RUN=false \
+  --set-env-vars=KILL_AMOUNT=6,DRY_RUN=false \
   --memory=256Mi
 ```
 
