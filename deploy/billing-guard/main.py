@@ -50,6 +50,7 @@ import base64
 import json
 import os
 
+import google.auth
 from googleapiclient import discovery
 
 
@@ -58,10 +59,41 @@ from googleapiclient import discovery
 # deployment, and changing it must not need a code edit.
 KILL_AMOUNT = float(os.environ.get("KILL_AMOUNT", "6.0"))
 
-# projects/<id>. Cloud Functions provides the id automatically.
-PROJECT_ID = os.environ.get("GCP_PROJECT") or os.environ.get(
-    "GOOGLE_CLOUD_PROJECT", ""
-)
+
+def _resolve_project_id() -> str:
+    """
+    Find the project this function is running in.
+
+    GCP_PROJECT and GOOGLE_CLOUD_PROJECT are gen1-only: Cloud Run (which is
+    what gen2 functions run on) does not set either one automatically. Its
+    reserved env vars are FUNCTION_TARGET, FUNCTION_SIGNATURE_TYPE, K_SERVICE,
+    K_REVISION and PORT -- none of which name the project. Checking only the
+    two gen1 vars, as an earlier version of this function did, silently
+    returns an empty PROJECT_ID on gen2 and the function then refuses to act
+    at all ("project id unavailable - cannot act") even when the kill
+    threshold is legitimately crossed.
+
+    google.auth.default() is the correct fallback: on Compute Engine, Cloud
+    Run, or App Engine flexible/standard(2nd gen) -- which covers this
+    function's actual runtime -- it resolves the project from the metadata
+    service without needing any env var at all.
+    """
+    env_project = os.environ.get("GCP_PROJECT") or os.environ.get(
+        "GOOGLE_CLOUD_PROJECT", ""
+    )
+    if env_project:
+        return env_project
+
+    try:
+        _, detected = google.auth.default()
+        return detected or ""
+    except Exception as exc:
+        print(f"[billing-guard] could not resolve project id via metadata service: {exc}")
+        return ""
+
+
+# projects/<id>.
+PROJECT_ID = _resolve_project_id()
 PROJECT_NAME = f"projects/{PROJECT_ID}"
 
 # Set DRY_RUN=true to log the decision without touching billing. Worth doing on
