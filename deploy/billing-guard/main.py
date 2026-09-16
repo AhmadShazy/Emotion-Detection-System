@@ -32,13 +32,18 @@ it is invoked.
 
 Required IAM
 ------------
-The function's service account needs, ON THE BILLING ACCOUNT (not the project):
+The function's service account needs BOTH of these, on two different
+resources:
 
-    roles/billing.projectManager
+    roles/billing.user            on the BILLING ACCOUNT
+    roles/billing.projectManager  on the PROJECT
 
-Without it the disable call fails with 403 and the function logs an error
-rather than stopping anything -- which is the worst of both worlds, so verify
-the permission after deploying.
+Both are required to unlink a project from a billing account -- neither one
+alone is enough, and gcloud rejects roles/billing.projectManager if you try to
+bind it at the billing-account scope (it is a project-level role, not a
+billing-account-level one). Without the full pair the disable call fails with
+403 and the function logs an error rather than stopping anything -- which is
+the worst of both worlds, so verify both bindings after deploying.
 """
 
 import base64
@@ -51,7 +56,7 @@ from googleapiclient import discovery
 # The spend at which billing is cut, in the budget's currency. Deliberately an
 # environment variable rather than a constant: the number lives with the
 # deployment, and changing it must not need a code edit.
-KILL_AMOUNT = float(os.environ.get("KILL_AMOUNT", "9.0"))
+KILL_AMOUNT = float(os.environ.get("KILL_AMOUNT", "6.0"))
 
 # projects/<id>. Cloud Functions provides the id automatically.
 PROJECT_ID = os.environ.get("GCP_PROJECT") or os.environ.get(
