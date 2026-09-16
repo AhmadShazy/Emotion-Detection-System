@@ -127,10 +127,10 @@ echo "$LOGS" | grep -q "FAILED:" \
 echo "$LOGS" | grep -q "All models ready" \
   || fail "registry did not report 'All models ready'"
 
-# Full mode must actually be full mode. A text-only image would start happily
-# and serve nothing but /analyze/text.
-echo "$LOGS" | grep -q "Mode: FULL" \
-  || fail "image did not start in FULL mode"
+# The startup log used to carry a "Mode: FULL" line, checked here to catch an
+# image accidentally built in the reduced text-only mode. That mode no longer
+# exists, so there is nothing left to confuse it with — and the four per-model
+# assertions above are a stronger guarantee than the banner ever was.
 
 echo "=============================================================="
 echo "PASS — no network was available, every model loaded, full mode"

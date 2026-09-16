@@ -56,12 +56,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# ── Mode ──────────────────────────────────────────────────────────────────────
-# true  → only /analyze/text and /mock/* are served, and only RoBERTa is loaded.
-#         Suitable for a small hosted instance the LLM team can build against.
-# false → every mode, all four models. Media comes from the browser, so the
-#         server needs no microphone, no camera and no OpenFace binary.
-TEXT_ONLY_MODE: bool = _env_bool("TEXT_ONLY_MODE", False)
+# NOTE: there is deliberately no TEXT_ONLY_MODE setting. The server once had a
+# reduced mode that served only /analyze/text and loaded only RoBERTa, so it
+# could run on a free tier that could not host the full stack. That deployment
+# plan was abandoned, and the flag then survived as a second code path nothing
+# exercised — half the routes had a disabled twin, the registry had two loading
+# strategies, and the frontend guessed which it was talking to. Every mode is
+# always available now.
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 # A comma-separated list of accepted keys. These are values YOU choose — they

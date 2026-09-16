@@ -4,8 +4,8 @@ routers/mock.py
 Contract sandbox for the LLM team.
 
 Serves frozen example payloads produced by the real fusion engine
-(scripts/generate_contract_payloads.py). Loads no ML models, so it runs on a
-tiny instance and stays available even in TEXT_ONLY_MODE.
+(scripts/generate_contract_payloads.py). Loads no ML models, so it answers
+instantly and works even while the registry is still warming up.
 
 Why this exists: the live text endpoint can only ever produce single-signal
 payloads. It never shows a face-vs-voice conflict, never shows confidence

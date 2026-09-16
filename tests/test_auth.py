@@ -110,8 +110,9 @@ def test_websocket_scope_is_gated_exactly_like_http(gate):
 
 def test_empty_key_set_disables_the_gate(monkeypatch):
     """
-    A real configuration rather than a hidden special case: a text-only demo,
-    or a checkout with no .env. Startup prints a loud banner when it happens.
+    A real configuration rather than a hidden special case: a throwaway local
+    demo, or a checkout with no .env. Startup prints a loud banner when it
+    happens.
     """
     monkeypatch.setattr(api, "API_KEYS", set())
     gate = api.APIKeyMiddleware(app=None)
@@ -173,6 +174,33 @@ def test_the_bypass_setting_is_really_gone():
     assert not hasattr(config, "ALLOW_LOCALHOST")
     assert not hasattr(api, "ALLOW_LOCALHOST")
     assert not hasattr(api, "_peer_is_loopback")
+
+
+def test_text_only_mode_is_really_gone():
+    """
+    Guards the other removal, for the same reason.
+
+    The server once had a reduced mode serving only /analyze/text, built for a
+    free tier that could not host the full stack. That plan was dropped and the
+    flag became a second code path nothing exercised: half the routes carried a
+    disabled twin, the registry had two loading strategies, and the frontend
+    asked /health which of them it was talking to. Every mode is always
+    available now.
+
+    A stale TEXT_ONLY_MODE left anywhere would read as live configuration, and
+    someone would eventually set it expecting it to do something.
+    """
+    import src.core.config as config
+    import src.core.model_registry as registry_mod
+
+    assert not hasattr(config, "TEXT_ONLY_MODE")
+    assert not hasattr(api, "TEXT_ONLY_MODE")
+    assert not hasattr(registry_mod, "TEXT_ONLY_MODE")
+
+    # Every analysis route must be registered unconditionally.
+    paths = {r.path for r in api.app.routes}
+    for required in ("/analyze/text", "/analyze/voice", "/analyze/video", "/ws/stream"):
+        assert required in paths, f"{required} is not registered"
 
 
 # ── End to end ────────────────────────────────────────────────────────────────

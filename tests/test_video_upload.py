@@ -122,11 +122,9 @@ def test_browser_recording_round_trip(tmp_path):
     with "Unsupported file type 'video/webm;codecs=vp9,opus'".
     """
     from fastapi.testclient import TestClient
-    from src.core.config import API_KEYS, TEXT_ONLY_MODE
+    from src.core.config import API_KEYS
     import api
 
-    if TEXT_ONLY_MODE:
-        pytest.skip("video route is not registered in text-only mode")
 
     clip = tmp_path / "clip.webm"
     subprocess.run([
