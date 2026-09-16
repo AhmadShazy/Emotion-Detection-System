@@ -11,24 +11,50 @@ network access at all.
 
 ## 1. Get the image
 
-Two pipelines exist. Either produces a deployable image; only the repository
-leaves your machine.
+GitHub Actions already builds this image on every push to `main` or `dev`, and
+verifies it by running it with no network access at all. **That verified image
+is the one to deploy.**
 
-| Pipeline | Pushes to | Trigger |
-|---|---|---|
-| `.github/workflows/build-image.yml` | `ghcr.io/<owner>/<repo>` | Push to `main` or `dev`, or run by hand from the Actions tab |
-| `cloudbuild.yaml` | Artifact Registry | `gcloud builds submit --config cloudbuild.yaml` |
+### Deploying on Cloud Run: copy, do not rebuild
+
+Cloud Run can only pull from Artifact Registry or GCR, not GHCR — so the image
+has to be moved. Copy it:
+
+```bash
+read -rs GHCR_TOKEN && export GHCR_TOKEN     # a PAT with read:packages only
+bash deploy/copy-image.sh latest
+```
+
+Run that in **Cloud Shell**. The script installs `crane`, creates the Artifact
+Registry repository if needed, streams the image across without writing it to
+local disk, and then confirms the source and destination **digests match** — so
+what lands in Artifact Registry is provably the artefact CI tested, not merely
+something that looks like it.
+
+**Why not just run `cloudbuild.yaml`?** It would spend 30–60 build-minutes
+reproducing something already proven, and the result would be a *different*
+image: different layer hashes, and two Linux-only transitive packages (`triton`,
+`sounddevice`) that `requirements.lock` cannot pin because it was frozen on
+Windows. Copying deploys the thing that was tested. Rebuilding deploys something
+that resembles it.
+
+`cloudbuild.yaml` remains for the case where you need to build inside GCP —
+after changing the Dockerfile, say, without going through GitHub.
 
 **Do not build this locally unless you have a fast connection.** The image is
 about 5 GB. Measured on the development machine, package downloads ran at
 9–76 kB/s: roughly 8 hours to build, and closer to 18 to push, with no way to
 resume a push from a cache. A CI runner does it in 11–12 minutes.
 
-### If the GHCR package is private
+### The GHCR package is private
 
-It inherits the repository's visibility. Either make the package public
-(**Repo → Packages → Package settings → Change visibility**) or give the host a
-pull credential: a GitHub token with `read:packages` only.
+It inherits the repository's visibility. Keep it that way and authenticate with
+a GitHub token scoped to `read:packages` and nothing else — which is what
+`copy-image.sh` expects in `GHCR_TOKEN`. Making the package public also works
+but is not necessary, since the copy happens once.
+
+Use `read -rs` rather than `export GHCR_TOKEN=...` so the value never reaches
+your shell history.
 
 ---
 

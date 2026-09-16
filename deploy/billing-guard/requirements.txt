@@ -1,0 +1,6 @@
+# Dependencies for the billing kill-switch Cloud Function.
+#
+# Pinned, for the same reason the application's own dependencies are pinned:
+# this function is a safety mechanism, and a safety mechanism that breaks on an
+# unattended dependency bump is worse than none, because it fails silently.
+google-api-python-client==2.149.0
